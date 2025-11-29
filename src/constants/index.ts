@@ -12,5 +12,9 @@ export const STORAGE_KEYS = {
 export const ROUTES = {
   HOME: '/',
   LOGIN: '/login',
+  STUDENTS: '/students',
+  QUESTIONS: '/questions',
+  PRACTICE: '/practice',
+  SETTINGS: '/settings',
 } as const
 
