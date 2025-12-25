@@ -2,17 +2,17 @@ export default function Settings() {
   return (
     <div>
       <h2 style={{ fontSize: 20, marginBottom: 12 }}>系统设置</h2>
-      <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>
+      <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 16 }}>
         配置“桂园听说”教师端的一些基础参数，如班级管理、练习时间段、评分规则等（当前为占位页面）。
       </p>
       <div
         style={{
           borderRadius: 12,
-          border: '1px dashed #d1d5db',
-          backgroundColor: '#f9fafb',
-          padding: '1.25rem 1.5rem',
+          border: "1px dashed #d1d5db",
+          backgroundColor: "#f9fafb",
+          padding: "1.25rem 1.5rem",
           fontSize: 13,
-          color: '#4b5563',
+          color: "#4b5563",
         }}
       >
         后续可以在这里配置：
@@ -24,7 +24,5 @@ export default function Settings() {
         </ul>
       </div>
     </div>
-  )
+  );
 }
-
-
