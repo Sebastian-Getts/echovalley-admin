@@ -17,11 +17,14 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        // 保留 /api 前缀，直接转发给后端
       },
     },
   },
 })
+
+
+
 
 
 

@@ -1,9 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { APP_TITLE, ROUTES, STORAGE_KEYS } from "../constants";
-
-const TEST_USERNAME = "Erin";
-const TEST_PASSWORD = "1004";
+import request from "../utils/request";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -12,7 +10,7 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -22,19 +20,40 @@ export default function Login() {
     }
 
     setSubmitting(true);
-    setTimeout(() => {
-      if (username === TEST_USERNAME && password === TEST_PASSWORD) {
-        localStorage.setItem(STORAGE_KEYS.TOKEN, "mock-token");
+    try {
+      const response = await request.post<{
+        code: number;
+        message: string;
+        data: {
+          token: string;
+          user: {
+            id: number;
+            name: string;
+            username: string;
+            role: string;
+          };
+        };
+      }>("/auth/login", {
+        username,
+        password,
+      });
+
+      if (response.code === 200 && response.data) {
+        localStorage.setItem(STORAGE_KEYS.TOKEN, response.data.token);
         localStorage.setItem(
           STORAGE_KEYS.USER_INFO,
-          JSON.stringify({ name: "Erin", role: "teacher" })
+          JSON.stringify(response.data.user)
         );
         navigate(ROUTES.HOME, { replace: true });
       } else {
-        setError("账号或密码错误（测试账号：Erin / 1004）");
+        setError(response.message || "登录失败");
       }
+    } catch (err: any) {
+      console.error("Login error:", err);
+      setError(err.message || "登录失败，请检查网络连接");
+    } finally {
       setSubmitting(false);
-    }, 400);
+    }
   };
 
   return (
@@ -108,7 +127,7 @@ export default function Login() {
             <input
               id="username"
               type="text"
-              placeholder="请输入教师账号（测试：Erin）"
+              placeholder="请输入教师账号"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               style={{
@@ -137,7 +156,7 @@ export default function Login() {
             <input
               id="password"
               type="password"
-              placeholder="请输入密码（测试：1004）"
+              placeholder="请输入密码"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={{
@@ -186,17 +205,6 @@ export default function Login() {
             {submitting ? "正在验证..." : "登录"}
           </button>
 
-          <p
-            style={{
-              marginTop: "0.75rem",
-              fontSize: 11,
-              color: "#9ca3af",
-              textAlign: "center",
-            }}
-          >
-            当前为测试环境 · 仅支持账号 <strong>Erin</strong> / 密码{" "}
-            <strong>1004</strong>
-          </p>
         </form>
 
         <footer

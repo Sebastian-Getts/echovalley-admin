@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import request from '../utils/request'
 
 // 学生数据类型
 interface Student {
@@ -9,24 +10,9 @@ interface Student {
   className: string
 }
 
-// Mock 学生数据
-const initialMockStudents: Student[] = [
-  { id: '1', studentId: '2024001', name: '王小明', grade: '初一', className: '1班' },
-  { id: '2', studentId: '2024002', name: '李婷婷', grade: '初一', className: '1班' },
-  { id: '3', studentId: '2024003', name: '张杰', grade: '初一', className: '1班' },
-  { id: '4', studentId: '2024004', name: '刘芳', grade: '初二', className: '2班' },
-  { id: '5', studentId: '2024005', name: '陈强', grade: '初二', className: '2班' },
-  { id: '6', studentId: '2024006', name: '杨洋', grade: '初二', className: '3班' },
-  { id: '7', studentId: '2024007', name: '赵敏', grade: '初三', className: '1班' },
-  { id: '8', studentId: '2024008', name: '周杰', grade: '初三', className: '2班' },
-  { id: '9', studentId: '2024009', name: '吴磊', grade: '初三', className: '2班' },
-  { id: '10', studentId: '2024010', name: '郑爽', grade: '初三', className: '3班' },
-  { id: '11', studentId: '2024011', name: '孙丽', grade: '初一', className: '2班' },
-  { id: '12', studentId: '2024012', name: '钱多多', grade: '初一', className: '3班' },
-]
-
 export default function StudentAccounts() {
-  const [students, setStudents] = useState<Student[]>(initialMockStudents)
+  const [students, setStudents] = useState<Student[]>([])
+  const [loading, setLoading] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Partial<Student>>({})
   const [isAdding, setIsAdding] = useState(false)
@@ -57,22 +43,10 @@ export default function StudentAccounts() {
     return Array.from(classes).sort()
   }, [students])
 
-  // 筛选后的学生列表
+  // 筛选后的学生列表（API已经完成筛选，这里直接使用students）
   const filteredStudents = useMemo(() => {
-    return students.filter((student) => {
-      if (filterGrade !== 'all' && student.grade !== filterGrade) return false
-      if (filterClass !== 'all' && student.className !== filterClass) return false
-      if (searchKeyword) {
-        const keyword = searchKeyword.toLowerCase()
-        return (
-          student.name.toLowerCase().includes(keyword) ||
-          student.studentId.toLowerCase().includes(keyword) ||
-          student.className.toLowerCase().includes(keyword)
-        )
-      }
-      return true
-    })
-  }, [students, filterGrade, filterClass, searchKeyword])
+    return students
+  }, [students])
 
   // 分页后的学生列表
   const paginatedStudents = useMemo(() => {
@@ -83,6 +57,63 @@ export default function StudentAccounts() {
 
   const totalPages = Math.ceil(filteredStudents.length / pageSize)
 
+  // 加载学生列表
+  useEffect(() => {
+    loadStudents()
+  }, [filterGrade, filterClass, searchKeyword])
+
+  const loadStudents = async () => {
+    setLoading(true)
+    try {
+      const params: any = {
+        skip: 0,
+        limit: 1000,
+      }
+
+      if (filterGrade !== 'all') {
+        params.grade = filterGrade
+      }
+      if (filterClass !== 'all') {
+        params.class = filterClass
+      }
+      if (searchKeyword) {
+        params.search = searchKeyword
+      }
+
+      const response = await request.get<{
+        code: number
+        message: string
+        data: {
+          total: number
+          items: Array<{
+            id: number
+            student_id: string
+            name: string
+            grade: string
+            class: string
+          }>
+        }
+      }>('/students', { params })
+
+      if (response.code === 200 && response.data) {
+        const formattedStudents: Student[] = response.data.items.map((s) => ({
+          id: s.id.toString(),
+          studentId: s.student_id,
+          name: s.name,
+          grade: s.grade,
+          className: s.class,
+        }))
+
+        setStudents(formattedStudents)
+      }
+    } catch (error) {
+      console.error('Failed to load students:', error)
+      setStudents([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // 开始编辑
   const handleStartEdit = (student: Student) => {
     setEditingId(student.id)
@@ -91,11 +122,23 @@ export default function StudentAccounts() {
   }
 
   // 保存编辑
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingId) return
-    setStudents(students.map((s) => (s.id === editingId ? { ...editForm, id: editingId } as Student : s)))
-    setEditingId(null)
-    setEditForm({})
+
+    try {
+      await request.put(`/students/${editingId}`, {
+        student_id: editForm.studentId,
+        name: editForm.name,
+        grade: editForm.grade,
+        class: editForm.className,
+      })
+
+      await loadStudents()
+      setEditingId(null)
+      setEditForm({})
+    } catch (err: any) {
+      alert(err.message || '更新失败')
+    }
   }
 
   // 取消编辑
@@ -107,12 +150,17 @@ export default function StudentAccounts() {
   }
 
   // 删除学生
-  const handleDelete = (id: string) => {
-    if (confirm('确定要删除该学生吗？')) {
-      setStudents(students.filter((s) => s.id !== id))
+  const handleDelete = async (id: string) => {
+    if (!confirm('确定要删除该学生吗？')) return
+
+    try {
+      await request.delete(`/students/${id}`)
+      await loadStudents()
       if (editingId === id) {
         setEditingId(null)
       }
+    } catch (err: any) {
+      alert(err.message || '删除失败')
     }
   }
 
@@ -124,20 +172,26 @@ export default function StudentAccounts() {
   }
 
   // 保存新增
-  const handleSaveAdd = () => {
+  const handleSaveAdd = async () => {
     if (!newStudent.studentId || !newStudent.name || !newStudent.className) {
       alert('请填写完整信息')
       return
     }
-    // 检查学号是否重复
-    if (students.some((s) => s.studentId === newStudent.studentId)) {
-      alert('学号已存在')
-      return
-    }
-    const newId = String(Date.now())
-    setStudents([...students, { ...newStudent, id: newId } as Student])
+
+    try {
+      await request.post('/students', {
+        student_id: newStudent.studentId,
+        name: newStudent.name,
+        grade: newStudent.grade,
+        class: newStudent.className,
+      })
+
+      await loadStudents()
     setIsAdding(false)
     setNewStudent({ studentId: '', name: '', grade: '初一', className: '' })
+    } catch (err: any) {
+      alert(err.message || '添加失败')
+    }
   }
 
   // 下载模板
@@ -156,59 +210,68 @@ export default function StudentAccounts() {
   }
 
   // 导入文件
-  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const text = event.target?.result as string
-      const lines = text.split('\n').filter((line) => line.trim())
-      const imported: Student[] = []
+    const formData = new FormData()
+    formData.append('file', file)
 
-      // 跳过表头，从第二行开始
-      for (let i = 1; i < lines.length; i++) {
-        const [studentId, name, grade, className] = lines[i].split(',').map((s) => s.trim())
-        if (studentId && name && grade && className) {
-          // 检查学号是否已存在
-          const exists = students.some((s) => s.studentId === studentId)
-          if (!exists) {
-            imported.push({
-              id: String(Date.now() + i),
-              studentId,
-              name,
-              grade,
-              className,
-            })
-          }
+    try {
+      const response = await request.post<{
+        code: number
+        message: string
+        data: {
+          success_count: number
+          failed_count: number
+          failed_items: Array<{ row: number; reason: string }>
         }
-      }
+      }>('/students/batch-import', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      })
 
-      if (imported.length > 0) {
-        setStudents([...students, ...imported])
-        alert(`成功导入 ${imported.length} 名学生`)
-      } else {
-        alert('没有可导入的学生（可能学号重复或格式错误）')
+      if (response.code === 200 && response.data) {
+        alert(
+          `成功导入 ${response.data.success_count} 名学生${
+            response.data.failed_count > 0 ? `，${response.data.failed_count} 名失败` : ''
+          }`
+        )
+        await loadStudents()
       }
-    }
-    reader.readAsText(file, 'UTF-8')
+    } catch (err: any) {
+      alert(err.message || '导入失败')
+    } finally {
     // 重置 input，允许重复选择同一文件
     e.target.value = ''
+    }
   }
 
   // 导出数据
-  const handleExport = () => {
-    const csv = [
-      ['学号', '姓名', '年级', '班级'],
-      ...students.map((s) => [s.studentId, s.name, s.grade, s.className]),
-    ]
-      .map((row) => row.join(','))
-      .join('\n')
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+  const handleExport = async () => {
+    try {
+      const params: any = {}
+      if (filterGrade !== 'all') params.grade = filterGrade
+      if (filterClass !== 'all') params.class = filterClass
+      if (searchKeyword) params.search = searchKeyword
+
+      const response = await request.get('/students/export', {
+        params,
+        responseType: 'blob',
+      })
+
+      const url = window.URL.createObjectURL(new Blob([response]))
     const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = `学生名单_${new Date().toISOString().split('T')[0]}.csv`
+      link.href = url
+      link.setAttribute('download', `学生名单_${new Date().toISOString().split('T')[0]}.csv`)
+      document.body.appendChild(link)
     link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      alert('导出失败')
+    }
   }
 
   return (
@@ -528,7 +591,13 @@ export default function StudentAccounts() {
               </tr>
             </thead>
             <tbody>
-              {paginatedStudents.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={5} style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
+                    加载中...
+                  </td>
+                </tr>
+              ) : paginatedStudents.length > 0 ? (
                 paginatedStudents.map((student) =>
                   editingId === student.id ? (
                     <tr key={student.id} style={{ borderTop: '1px solid #f3f4f6', backgroundColor: '#eff6ff' }}>

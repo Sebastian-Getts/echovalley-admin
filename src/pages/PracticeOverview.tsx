@@ -235,7 +235,7 @@ const generateMockData = (
 
 // 语音播放组件
 function AudioPlayer({
-  audioUrl: _audioUrl,
+  audioUrl,
   studentName,
 }: {
   audioUrl: string;
@@ -244,28 +244,32 @@ function AudioPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [audio] = useState(() => {
-    // 创建 mock 音频对象（实际应该使用真实的音频 URL）
     const audioObj = new Audio();
-    // 使用一个静音的 data URL 作为 mock，避免实际网络请求
-    // 实际使用时，audioUrl 应该是真实的学生录音 URL
-    audioObj.src =
-      "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZijYIG2i77+efTRAMUKfj8LZjHAY4kdfyzHksBSR3x/DdkEAKFF606euoVRQKRp/g8r5sIQUrgc7y2Yo2CBtou+/nn00QDFCn4/C2YxwGOJHX8sx5LAUkd8fw3ZBAC"; // Mock 静音音频
     audioObj.onended = () => setIsPlaying(false);
     audioObj.onpause = () => setIsPlaying(false);
-    // 只在真正加载失败时设置错误，而不是在播放过程中
     audioObj.onerror = () => {
-      // 检查是否是真正的加载错误
-      if (audioObj.readyState === 0) {
         setHasError(true);
         setIsPlaying(false);
-      }
     };
     return audioObj;
   });
 
+  // 当 audioUrl 变化时更新音频源
+  useEffect(() => {
+    if (audioUrl) {
+      audio.src = audioUrl;
+      setHasError(false);
+    }
+  }, [audioUrl, audio]);
+
   const handlePlay = () => {
+    if (!audioUrl) {
+      alert("音频URL不存在");
+      return;
+    }
+    
     if (hasError) {
-      alert("音频加载失败（当前为 mock 数据，请等待真实接口接入）");
+      alert("音频加载失败，请检查音频URL是否有效");
       return;
     }
 
@@ -337,13 +341,65 @@ export default function PracticeOverview() {
   const [studentAnswers, setStudentAnswers] = useState<StudentAnswerResponse[]>(
     []
   );
+  const [questions, setQuestions] = useState<Array<{id: string; title: string; type: string}>>([]);
   const [loading, setLoading] = useState(false);
   const [useApiData, setUseApiData] = useState(true); // 是否使用API数据，如果API失败则回退到mock数据
+
+  // 加载题目列表
+  useEffect(() => {
+    loadQuestions();
+  }, [mode, questionType]);
+
+  const loadQuestions = async () => {
+    try {
+      const params: any = {
+        skip: 0,
+        limit: 1000,
+      };
+      
+      if (mode === "exam") {
+        params.mode = "exam";
+        params.type = "exam";
+      } else {
+        params.mode = "practice";
+        if (questionType !== "all") {
+          params.type = questionType;
+        }
+      }
+
+      const response = await request.get<{
+        code: number;
+        message: string;
+        data: {
+          total: number;
+          items: Array<{
+            id: number;
+            title: string;
+            mode: string;
+            type: string;
+          }>;
+        };
+      }>("/questions", { params });
+
+      if (response.code === 200 && response.data) {
+        const formattedQuestions = response.data.items.map((q) => ({
+          id: q.id.toString(),
+          title: q.title,
+          type: q.type,
+        }));
+        setQuestions(formattedQuestions);
+      }
+    } catch (error) {
+      console.error("Failed to load questions:", error);
+      // 如果API失败，使用mock数据作为fallback
+      setQuestions(mockQuestions);
+    }
+  };
 
   // 根据筛选条件过滤题目
   const filteredQuestions = useMemo(
     () =>
-      mockQuestions.filter((q) => {
+      (questions.length > 0 ? questions : mockQuestions).filter((q) => {
         if (mode === "exam") {
           return q.type === "exam";
         } else {
@@ -353,7 +409,7 @@ export default function PracticeOverview() {
           );
         }
       }),
-    [mode, questionType]
+    [mode, questionType, questions]
   );
 
   // 从API加载数据
@@ -386,12 +442,30 @@ export default function PracticeOverview() {
         params.search = detailSearchKeyword;
       }
 
+      // 根据 mode 和 questionType 添加筛选
+      if (mode === "exam") {
+        params.mode = "exam";
+      } else {
+        params.mode = "practice";
+        if (questionType !== "all") {
+          params.question_type = questionType;
+        }
+      }
+
       const response = await request.get<{
+        code: number;
+        message: string;
+        data: {
         total: number;
         items: StudentAnswerResponse[];
-      }>("/v1/student-answers", { params });
+        };
+      }>("/student-answers", { params });
 
-      setStudentAnswers(response.items || []);
+      if (response.code === 200 && response.data) {
+        setStudentAnswers(response.data.items || []);
+      } else {
+        throw new Error(response.message || "获取数据失败");
+      }
     } catch (error) {
       console.error("Failed to load student answers:", error);
       // API失败时回退到mock数据
@@ -415,7 +489,7 @@ export default function PracticeOverview() {
           id: answer.id.toString(),
           studentId: answer.student_student_id || "",
           name: answer.student_name || "",
-          class: "未知班级", // API中没有班级信息，需要从student表关联获取
+          class: answer.student_class || "未知班级",
           score: answer.score || 0,
           grade: (answer.grade || "低分") as "优秀" | "及格" | "低分",
           audioUrl: answer.audio_url || "",
