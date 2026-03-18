@@ -98,6 +98,13 @@ interface PrefaceItem {
   content: string
   audio_url: string
 }
+// TTS 音色
+interface Voice {
+  code: string
+  name: string
+  language: 'zh' | 'en'
+}
+
 // 题型旁白列表（用于「旁白语音」页签）
 interface QuestionTypePreface {
   id: number
@@ -219,6 +226,11 @@ export default function QuestionManagement() {
   const [prefaceLoading, setPrefaceLoading] = useState(false)
   const [prefaceGeneratingKey, setPrefaceGeneratingKey] = useState<string | null>(null)
 
+  // TTS 音色选择
+  const [availableVoices, setAvailableVoices] = useState<Voice[]>([])
+  const [selectedVoice, setSelectedVoice] = useState<string>('')
+  const [voicesLoading, setVoicesLoading] = useState(false)
+
   const loadPrefaceItems = async () => {
     setPrefaceLoading(true)
     try {
@@ -240,12 +252,60 @@ export default function QuestionManagement() {
     }
   }
 
+  // 加载 TTS 音色列表
+  useEffect(() => {
+    const loadVoices = async () => {
+      setVoicesLoading(true)
+      try {
+        const response = (await request.get('/tts/voices')) as {
+          code: number
+          message: string
+          data: Voice[]
+        }
+        if (response?.code === 200 && Array.isArray(response.data)) {
+          setAvailableVoices(response.data)
+          // 默认选择第一个音色
+          if (response.data.length > 0 && !selectedVoice) {
+            setSelectedVoice(response.data[0].code)
+          }
+        } else {
+          // 使用 fallback 音色
+          const fallbackVoices: Voice[] = [
+            { code: 'zh-CN-XiaoxiaoNeural', name: '晓晓 (中文女)', language: 'zh' },
+            { code: 'zh-CN-YunxiNeural', name: '云希 (中文男)', language: 'zh' },
+            { code: 'en-US-JennyNeural', name: 'Jenny (English Female)', language: 'en' },
+          ]
+          setAvailableVoices(fallbackVoices)
+          if (!selectedVoice) {
+            setSelectedVoice(fallbackVoices[0].code)
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load voices:', e)
+        // 使用 fallback 音色
+        const fallbackVoices: Voice[] = [
+          { code: 'zh-CN-XiaoxiaoNeural', name: '晓晓 (中文女)', language: 'zh' },
+          { code: 'zh-CN-YunxiNeural', name: '云希 (中文男)', language: 'zh' },
+          { code: 'en-US-JennyNeural', name: 'Jenny (English Female)', language: 'en' },
+        ]
+        setAvailableVoices(fallbackVoices)
+        if (!selectedVoice) {
+          setSelectedVoice(fallbackVoices[0].code)
+        }
+      } finally {
+        setVoicesLoading(false)
+      }
+    }
+    loadVoices()
+  }, [])
+
   const handlePrefaceGenerate = async (questionTypeId: number, itemIndex: number) => {
     const key = `${questionTypeId}-${itemIndex}`
     setPrefaceGeneratingKey(key)
     try {
       const response = (await request.post(
-        `/question-types/${questionTypeId}/preface-items/${itemIndex}/synthesize`
+        `/question-types/${questionTypeId}/preface-items/${itemIndex}/synthesize`,
+        { voice: selectedVoice }
       )) as { code: number; message: string; data?: { audio_url: string } }
       if (response?.code === 200 && response.data?.audio_url) {
         setPrefaceList((prev) =>
@@ -2959,6 +3019,56 @@ export default function QuestionManagement() {
               各题型前置旁白文本的语音合成，同一题型下所有题目共用。生成后即保存到题型配置中。音色由配置中的「旁白音色」控制。
             </p>
           </div>
+
+          {/* 音色选择器 */}
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '1rem',
+              borderRadius: 8,
+              backgroundColor: '#f9fafb',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <label
+              style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 8,
+              }}
+            >
+              音色选择：
+            </label>
+            <select
+              value={selectedVoice}
+              onChange={(e) => setSelectedVoice(e.target.value)}
+              disabled={voicesLoading}
+              style={{
+                width: '100%',
+                maxWidth: 400,
+                padding: '0.5rem 0.75rem',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                backgroundColor: '#ffffff',
+                color: '#374151',
+                fontSize: 13,
+                cursor: voicesLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {voicesLoading ? (
+                <option value="">加载中…</option>
+              ) : (
+                availableVoices.map((voice) => (
+                  <option key={voice.code} value={voice.code}>
+                    {voice.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
           {prefaceLoading ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>加载中…</div>
           ) : (
