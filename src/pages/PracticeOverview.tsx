@@ -14,6 +14,14 @@ import {
 } from "recharts";
 import request from "../utils/request";
 
+// 音频代理URL处理
+const getApiBase = () => {
+  const base = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+  return base.startsWith('http') ? base.replace(/\/$/, '') : `${window.location.origin}${base.startsWith('/') ? base : '/' + base}`
+}
+const getAudioProxyUrl = (minioUrl: string) =>
+  `${getApiBase()}/audio/proxy?url=${encodeURIComponent(minioUrl)}`
+
 // 题型选项
 const QUESTION_TYPES = [
   { value: "imitation", label: "模仿朗读" },
@@ -41,6 +49,9 @@ interface StudentDetail {
   score: number;
   grade: "优秀" | "及格" | "低分";
   audioUrl: string;
+  audioUrls?: string[]; // 听选信息有多个音频
+  questionTitle?: string; // 题目名称
+  questionType?: string; // 题型：imitation, listening, answering, retelling
 }
 
 // API返回的答题记录类型
@@ -55,6 +66,8 @@ interface StudentAnswerResponse {
   max_score?: number;
   grade?: string;
   audio_url?: string;
+  audio_urls?: string[];  // 所有音频URL（听选信息有多个）
+  question_type?: string; // 题型：imitation, listening, answering, retelling
   status: string;
   submitted_at: string;
 }
@@ -233,90 +246,169 @@ const generateMockData = (
   return baseData;
 };
 
-// 语音播放组件
+// 语音播放组件（只负责按钮，点击事件由父组件处理）
 function AudioPlayer({
+  questionType,
+  isExpanded,
+  onToggleExpand,
   audioUrl,
-  studentName,
+  isPlaying,
+  onPlay,
 }: {
-  audioUrl: string;
-  studentName: string;
+  questionType?: string;
+  isExpanded?: boolean;
+  onToggleExpand?: () => void;
+  audioUrl?: string;
+  isPlaying?: boolean;
+  onPlay?: (url: string, index: number) => void;
 }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const [audio] = useState(() => {
-    const audioObj = new Audio();
-    audioObj.onended = () => setIsPlaying(false);
-    audioObj.onpause = () => setIsPlaying(false);
-    audioObj.onerror = () => {
-        setHasError(true);
-        setIsPlaying(false);
-    };
-    return audioObj;
-  });
-
-  // 当 audioUrl 变化时更新音频源
-  useEffect(() => {
-    if (audioUrl) {
-      audio.src = audioUrl;
-      setHasError(false);
-    }
-  }, [audioUrl, audio]);
-
-  const handlePlay = () => {
-    if (!audioUrl) {
-      alert("音频URL不存在");
-      return;
-    }
-    
-    if (hasError) {
-      alert("音频加载失败，请检查音频URL是否有效");
-      return;
-    }
-
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-    } else {
-      // 如果音频还未加载，先加载
-      if (audio.readyState === 0) {
-        audio.load();
-      }
-      audio
-        .play()
-        .then(() => {
-          setIsPlaying(true);
-        })
-        .catch((err) => {
-          // 只在真正的播放错误时提示，忽略用户交互相关的错误
-          if (err.name !== "NotAllowedError" && err.name !== "AbortError") {
-            setHasError(true);
-            setIsPlaying(false);
-          }
-        });
-    }
-  };
+  const isExpandable = questionType === 'listening' || questionType === 'answering' || questionType === 'retelling';
 
   return (
-    <button
-      type="button"
-      onClick={handlePlay}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: 32,
-        height: 32,
-        borderRadius: 6,
-        border: "1px solid #e5e7eb",
-        backgroundColor: isPlaying ? "#eff6ff" : "#ffffff",
-        color: isPlaying ? "#1d4ed8" : "#6b7280",
-        cursor: "pointer",
-        fontSize: 14,
-      }}
-      title={`播放 ${studentName} 的录音`}
-    >
-      {isPlaying ? "⏸" : "▶"}
-    </button>
+    <div style={{ display: "inline-block" }}>
+      {/* 听选信息/回答问题：展开按钮 */}
+      {isExpandable && (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            border: "1px solid #e5e7eb",
+            backgroundColor: isExpanded ? "#eff6ff" : "#ffffff",
+            color: isExpanded ? "#1d4ed8" : "#6b7280",
+            cursor: "pointer",
+            fontSize: 14,
+          }}
+          title={isExpanded ? "收起" : "展开全部"}
+        >
+          {isExpanded ? "▲" : "▼"}
+        </button>
+      )}
+
+      {/* 非展开题型：播放按钮 */}
+      {!isExpandable && audioUrl && (
+        <button
+          type="button"
+          onClick={() => onPlay?.(audioUrl, 0)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 32,
+            height: 32,
+            borderRadius: 6,
+            border: "1px solid #e5e7eb",
+            backgroundColor: isPlaying ? "#eff6ff" : "#ffffff",
+            color: isPlaying ? "#1d4ed8" : "#6b7280",
+            cursor: "pointer",
+            fontSize: 14,
+          }}
+          title="播放"
+        >
+          {isPlaying ? "⏸" : "▶"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// 展开行组件（均匀排列N个音频按钮）
+function ExpandRow({
+  audioUrls,
+  playingIndex,
+  isPlaying,
+  onPlay,
+  slotCount,
+}: {
+  audioUrls?: string[];
+  playingIndex: number;
+  isPlaying: boolean;
+  onPlay: (url: string, index: number) => void;
+  slotCount: number;
+}) {
+  return (
+    <td colSpan={7} style={{ padding: "0.5rem 0.8rem", backgroundColor: "#f9fafb" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-around",
+          gap: 8,
+        }}
+      >
+        {Array.from({ length: slotCount }, (_, idx) => {
+          const url = audioUrls?.[idx];
+          const isCurrentPlaying = playingIndex === idx && isPlaying;
+          return (
+            <div
+              key={idx}
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                minWidth: 70,
+              }}
+            >
+              {/* 题号 */}
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "#6b7280",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                第{idx + 1}题
+              </span>
+              {/* 播放按钮/空 */}
+              {url ? (
+                <button
+                  type="button"
+                  onClick={() => onPlay(url, idx)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 32,
+                    height: 32,
+                    borderRadius: 6,
+                    border: "1px solid #e5e7eb",
+                    backgroundColor: isCurrentPlaying ? "#eff6ff" : "#ffffff",
+                    color: isCurrentPlaying ? "#1d4ed8" : "#6b7280",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  {isCurrentPlaying ? "⏸" : "▶"}
+                </button>
+              ) : (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 32,
+                    height: 32,
+                    borderRadius: 6,
+                    border: "1px dashed #d1d5db",
+                    backgroundColor: "#f3f4f6",
+                    color: "#9ca3af",
+                    fontSize: 12,
+                  }}
+                >
+                  -
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </td>
   );
 }
 
@@ -342,8 +434,103 @@ export default function PracticeOverview() {
     []
   );
   const [questions, setQuestions] = useState<Array<{id: string; title: string; type: string}>>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false); // eslint-disable-line @typescript-eslint/no-unused-vars
   const [useApiData, setUseApiData] = useState(true); // 是否使用API数据，如果API失败则回退到mock数据
+
+  // 听选信息展开状态
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+
+  // 共享音频播放状态
+  const audioRef = useMemo(() => new Audio(), []);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playingIndex, setPlayingIndex] = useState<number>(-1);
+  const [currentPlayingUrl, setCurrentPlayingUrl] = useState<string | null>(null);
+
+  // 共享音频播放函数
+  const playAudio = (url: string, index: number = 0) => {
+    if (!url) return;
+
+    const isCrossOrigin = () => {
+      try {
+        return new URL(url).origin !== window.location.origin;
+      } catch {
+        return true;
+      }
+    };
+
+    const playWithUrl = (src: string) => {
+      audioRef.src = src;
+      audioRef.load();
+      const playPromise = audioRef.play();
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          setIsPlaying(true);
+          setPlayingIndex(index);
+          setCurrentPlayingUrl(url);
+        }).catch((err) => {
+          console.error("[AudioPlayer] Play failed:", err.name, err.message);
+        });
+      }
+    };
+
+    if (isCrossOrigin()) {
+      const token = localStorage.getItem('token');
+      const proxyUrl = getAudioProxyUrl(url);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      fetch(proxyUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal
+      })
+        .then((res) => {
+          clearTimeout(timeoutId);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.blob();
+        })
+        .then((blob) => {
+          if (blob.size === 0) throw new Error("Empty blob");
+          const objectUrl = URL.createObjectURL(blob);
+          playWithUrl(objectUrl);
+        })
+        .catch((err) => {
+          clearTimeout(timeoutId);
+          console.error("[AudioPlayer] Proxy fetch failed:", err.message);
+        });
+    } else {
+      playWithUrl(url);
+    }
+  };
+
+  // 切换播放/停止
+  const togglePlay = (url: string, index: number) => {
+    if (currentPlayingUrl === url && isPlaying) {
+      audioRef.pause();
+    } else {
+      playAudio(url, index);
+    }
+  };
+
+  // 音频事件监听
+  useEffect(() => {
+    const audio = audioRef;
+    audio.onended = () => {
+      setIsPlaying(false);
+      setPlayingIndex(-1);
+    };
+    audio.onpause = () => {
+      setIsPlaying(false);
+      setPlayingIndex(-1);
+    };
+    audio.onerror = () => {
+      setIsPlaying(false);
+      setPlayingIndex(-1);
+    };
+    return () => {
+      audio.pause();
+      audio.src = "";
+    };
+  }, [audioRef]);
 
   // 加载题目列表
   useEffect(() => {
@@ -462,6 +649,13 @@ export default function PracticeOverview() {
       }>("/student-answers", { params });
 
       if (response.code === 200 && response.data) {
+        console.log("[API] student-answers response:", JSON.stringify(response.data, null, 2));
+        console.log("[API] items count:", response.data.items?.length);
+        if (response.data.items?.length > 0) {
+          console.log("[API] first item keys:", Object.keys(response.data.items[0]));
+          console.log("[API] first item audio_url:", response.data.items[0]?.audio_url);
+          console.log("[API] first item audio_urls:", response.data.items[0]?.audio_urls);
+        }
         setStudentAnswers(response.data.items || []);
       } else {
         throw new Error(response.message || "获取数据失败");
@@ -475,25 +669,28 @@ export default function PracticeOverview() {
     }
   };
 
-  // 将API数据转换为前端使用的格式
+  // 将API数据转换为前端使用的格式（每条答题记录单独一行，显示题目信息）
   const baseStudentDetails = useMemo(() => {
     if (useApiData && studentAnswers.length > 0) {
-      // 从API数据转换
-      return studentAnswers
-        .filter((answer) => {
-          // 根据mode和questionType筛选
-          // 这里需要根据实际的题目类型来筛选，暂时先返回所有数据
-          return true;
-        })
-        .map((answer) => ({
-          id: answer.id.toString(),
+      // 每条答题记录作为单独一行，不再按学生分组
+      return studentAnswers.map((answer) => {
+        // 优先使用 audio_urls，否则用 audio_url
+        const audioUrls = answer.audio_urls || (answer.audio_url ? [answer.audio_url] : []);
+        const primaryAudioUrl = audioUrls[0] || "";
+
+        return {
+          id: `${answer.id}`,
           studentId: answer.student_student_id || "",
           name: answer.student_name || "",
           class: answer.student_class || "未知班级",
           score: answer.score || 0,
           grade: (answer.grade || "低分") as "优秀" | "及格" | "低分",
-          audioUrl: answer.audio_url || "",
-        }));
+          audioUrl: primaryAudioUrl,
+          audioUrls: audioUrls,
+          questionTitle: answer.question_title || "未知题目",
+          questionType: answer.question_type,
+        };
+      });
     } else {
       // 使用mock数据
       return generateMockData(mode, questionType, selectedQuestion);
@@ -1101,6 +1298,16 @@ export default function PracticeOverview() {
                 </th>
                 <th
                   style={{
+                    textAlign: "left",
+                    padding: "0.6rem 0.8rem",
+                    fontWeight: 600,
+                    width: "200px",
+                  }}
+                >
+                  题目
+                </th>
+                <th
+                  style={{
                     textAlign: "right",
                     padding: "0.6rem 0.8rem",
                     fontWeight: 600,
@@ -1138,67 +1345,105 @@ export default function PracticeOverview() {
             <tbody>
               {paginatedDetails.length > 0 ? (
                 paginatedDetails.map((student) => (
-                  <tr
-                    key={student.id}
-                    style={{ borderTop: "1px solid #f3f4f6" }}
-                  >
-                    <td style={{ padding: "0.6rem 0.8rem" }}>
-                      {student.studentId}
-                    </td>
-                    <td style={{ padding: "0.6rem 0.8rem" }}>{student.name}</td>
-                    <td style={{ padding: "0.6rem 0.8rem" }}>
-                      {student.class}
-                    </td>
-                    <td
-                      style={{
-                        padding: "0.6rem 0.8rem",
-                        textAlign: "right",
-                        fontWeight: 500,
-                      }}
+                  <>
+                    <tr
+                      key={student.id}
+                      style={{ borderTop: "1px solid #f3f4f6" }}
                     >
-                      {student.score} 分
-                    </td>
-                    <td
-                      style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}
-                    >
-                      <span
+                      <td style={{ padding: "0.6rem 0.8rem" }}>
+                        {student.studentId}
+                      </td>
+                      <td style={{ padding: "0.6rem 0.8rem" }}>{student.name}</td>
+                      <td style={{ padding: "0.6rem 0.8rem" }}>
+                        {student.class}
+                      </td>
+                      <td
                         style={{
-                          display: "inline-block",
-                          padding: "0.2rem 0.6rem",
-                          borderRadius: 6,
-                          fontSize: 11,
+                          padding: "0.6rem 0.8rem",
+                          fontSize: 12,
+                          maxWidth: 200,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={student.questionTitle}
+                      >
+                        {student.questionTitle}
+                      </td>
+                      <td
+                        style={{
+                          padding: "0.6rem 0.8rem",
+                          textAlign: "right",
                           fontWeight: 500,
-                          backgroundColor:
-                            student.grade === "优秀"
-                              ? "#dbeafe"
-                              : student.grade === "及格"
-                              ? "#d1fae5"
-                              : "#fee2e2",
-                          color:
-                            student.grade === "优秀"
-                              ? "#1e40af"
-                              : student.grade === "及格"
-                              ? "#065f46"
-                              : "#991b1b",
                         }}
                       >
-                        {student.grade}
-                      </span>
-                    </td>
-                    <td
-                      style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}
-                    >
-                      <AudioPlayer
-                        audioUrl={student.audioUrl}
-                        studentName={student.name}
-                      />
-                    </td>
-                  </tr>
+                        {student.score} 分
+                      </td>
+                      <td
+                        style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}
+                      >
+                        <span
+                          style={{
+                            display: "inline-block",
+                            padding: "0.2rem 0.6rem",
+                            borderRadius: 6,
+                            fontSize: 11,
+                            fontWeight: 500,
+                            backgroundColor:
+                              student.grade === "优秀"
+                                ? "#dbeafe"
+                                : student.grade === "及格"
+                                ? "#d1fae5"
+                                : "#fee2e2",
+                            color:
+                              student.grade === "优秀"
+                                ? "#1e40af"
+                                : student.grade === "及格"
+                                ? "#065f46"
+                                : "#991b1b",
+                          }}
+                        >
+                          {student.grade}
+                        </span>
+                      </td>
+                      <td
+                        style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}
+                      >
+                        <AudioPlayer
+                          questionType={student.questionType}
+                          isExpanded={expandedRowId === student.id}
+                          onToggleExpand={() => {
+                            setExpandedRowId(
+                              expandedRowId === student.id ? null : student.id
+                            );
+                          }}
+                          audioUrl={student.audioUrl}
+                          isPlaying={(student.questionType !== 'listening' && student.questionType !== 'answering') && currentPlayingUrl === student.audioUrl && isPlaying}
+                          onPlay={togglePlay}
+                        />
+                      </td>
+                    </tr>
+                    {/* 听选信息/回答问题/短文复述及提问展开行 */}
+                    {(student.questionType === 'listening' || student.questionType === 'answering' || student.questionType === 'retelling') && expandedRowId === student.id && (
+                      <tr
+                        key={`${student.id}-expanded`}
+                        style={{ backgroundColor: "#f9fafb" }}
+                      >
+                        <ExpandRow
+                          audioUrls={student.audioUrls}
+                          playingIndex={playingIndex}
+                          isPlaying={isPlaying}
+                          onPlay={togglePlay}
+                          slotCount={student.questionType === 'listening' ? 6 : student.questionType === 'retelling' ? 3 : 4}
+                        />
+                      </tr>
+                    )}
+                  </>
                 ))
               ) : (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     style={{
                       padding: "2rem",
                       textAlign: "center",

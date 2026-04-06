@@ -6,6 +6,7 @@ import QuestionManagement from './pages/QuestionManagement'
 import PracticeOverview from './pages/PracticeOverview'
 import Settings from './pages/Settings'
 import { ROUTES, STORAGE_KEYS } from './constants'
+import { ToastProvider } from './components/Toast'
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
   const isAuthed = !!localStorage.getItem(STORAGE_KEYS.TOKEN)
@@ -17,25 +18,27 @@ function RequireAuth({ children }: { children: React.ReactElement }) {
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path={ROUTES.LOGIN} element={<Login />} />
-        <Route
-          path={ROUTES.HOME}
-          element={
-            <RequireAuth>
-              <Layout />
-            </RequireAuth>
-          }
-        >
-          <Route index element={<PracticeOverview />} />
-          <Route path="students" element={<StudentAccounts />} />
-          <Route path="questions" element={<QuestionManagement />} />
-          <Route path="practice" element={<PracticeOverview />} />
-          <Route path="settings" element={<Settings />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path={ROUTES.LOGIN} element={<Login />} />
+          <Route
+            path={ROUTES.HOME}
+            element={
+              <RequireAuth>
+                <Layout />
+              </RequireAuth>
+            }
+          >
+            <Route index element={<PracticeOverview />} />
+            <Route path="students" element={<StudentAccounts />} />
+            <Route path="questions" element={<QuestionManagement />} />
+            <Route path="practice" element={<PracticeOverview />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
   )
 }
 

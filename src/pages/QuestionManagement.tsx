@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import request from '../utils/request'
+import { useToast } from '../components/Toast'
 
 // API 基础路径（用于音频代理，解决 MinIO 跨域无法播放）
 const getApiBase = () => {
@@ -37,6 +38,7 @@ interface ImitationFormData {
   difficulty: number
   content: string
   audio_url?: string // 语音地址，编辑时用于播放；保存时由后端按规则生成
+  duration?: number // 🔥 语音时长（秒）
 }
 
 // 听选信息表单数据
@@ -45,11 +47,20 @@ interface ListeningFormData {
   mode: 'practice' | 'exam' | 'unset' // unset表示未指定
   type: 'listening'
   difficulty: number
+  // narration from t_question_types (read-only in edit form)
+  narrationItems: Array<{
+    index: number
+    content: string
+    audio_url: string
+  }>
+  // 对话文本（短文）和问题
   dialogues: Array<{
-    text: string
+    text: string // 短文文本内容
+    textAudioUrl?: string // 短文音频URL
+    textDuration?: number // 短文音频时长（秒）
     questions: [string, string] // 固定2个问题
-    textAudioUrl?: string
     questionsAudioUrl?: [string, string] // 与 questions 一一对应
+    questionsDuration?: [number, number] // 与 questions 一一对应
   }>
 }
 
@@ -62,7 +73,9 @@ interface AnsweringFormData {
   text: string // 短文文本内容
   questions: [string, string, string, string] // 固定4个问题
   textAudioUrl?: string
+  textDuration?: number
   questionsAudioUrl?: [string, string, string, string] // 与 questions 一一对应
+  questionsDuration?: [number, number, number, number] // 与 questions 一一对应
 }
 
 // 短文复述及提问表单数据
@@ -72,7 +85,12 @@ interface RetellingFormData {
   type: 'retelling'
   difficulty: number
   theme: string // 主题描述（中文）
-  example: string // 示例文本内容（英文短文）
+  themeAudioUrl?: string // 主题描述的语音URL
+  themeDuration?: number // 主题描述的语音时长
+  content: string // 短文内容
+  textAudioUrl?: string // 短文内容的语音URL
+  textDuration?: number // 短文内容的语音时长
+  example: string // 样例
   img_url: string // 图片URL
   questions: [string, string] // 固定2个问题
   questionsAudioUrl?: [string, string] // 与 questions 一一对应
@@ -114,6 +132,9 @@ interface QuestionTypePreface {
 }
 
 export default function QuestionManagement() {
+  // Toast 通知
+  const toast = useToast()
+
   // 标签页切换
   const [activeTab, setActiveTab] = useState<'questions' | 'papers' | 'preface'>('questions')
   
@@ -135,7 +156,7 @@ export default function QuestionManagement() {
   const [isEditing, setIsEditing] = useState(false)
   const [isViewing, setIsViewing] = useState(false)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
-  const [viewingQuestion, setViewingQuestion] = useState<(Question & { content_json?: any }) | null>(null)
+  const [viewingQuestion, setViewingQuestion] = useState<(Question & { content_json?: any; narrationItems?: Array<{ index: number; content: string; audio_url: string }> }) | null>(null)
   const [newQuestionType, setNewQuestionType] = useState<'imitation' | 'listening' | 'answering' | 'retelling' | null>(null)
   const [imitationForm, setImitationForm] = useState<ImitationFormData>({
     title: '',
@@ -149,10 +170,11 @@ export default function QuestionManagement() {
     mode: 'unset', // 默认"未指定"
     type: 'listening',
     difficulty: 3, // 1-5 整数，默认3
+    narrationItems: [],
     dialogues: [
-      { text: '', questions: ['', ''] },
-      { text: '', questions: ['', ''] },
-      { text: '', questions: ['', ''] },
+      { text: '', textAudioUrl: '', questions: ['', ''] },
+      { text: '', textAudioUrl: '', questions: ['', ''] },
+      { text: '', textAudioUrl: '', questions: ['', ''] },
     ],
   })
   const [answeringForm, setAnsweringForm] = useState<AnsweringFormData>({
@@ -169,6 +191,9 @@ export default function QuestionManagement() {
     type: 'retelling',
     difficulty: 3, // 1-5 整数，默认3
     theme: '',
+    content: '',
+    textAudioUrl: '',
+    textDuration: 0,
     example: '',
     img_url: '',
     questions: ['', ''],
@@ -299,56 +324,187 @@ export default function QuestionManagement() {
     loadVoices()
   }, [])
 
-  const handlePrefaceGenerate = async (questionTypeId: number, itemIndex: number) => {
-    const key = `${questionTypeId}-${itemIndex}`
+  // 旁白语音播放的object URL（用于清理）
+  const prefaceObjectUrlRef = useRef<string | null>(null)
+  // 批量播放中断标志
+  const prefaceAbortControllerRef = useRef<AbortController | null>(null)
+
+  // 清理音频资源，防止内存泄漏
+  useEffect(() => {
+    return () => {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
+      if (prefaceObjectUrlRef.current) {
+        URL.revokeObjectURL(prefaceObjectUrlRef.current)
+        prefaceObjectUrlRef.current = null
+      }
+    }
+  }, [])
+
+  // 批量生成所有旁白语音
+  const handlePrefaceGenerateAll = async (questionTypeId: number) => {
+    const key = `${questionTypeId}-all`
     setPrefaceGeneratingKey(key)
+    setAudioError(null)
     try {
+      // 为批量语音生成请求设置更长的超时时间（5分钟），因为需要生成多个语音
       const response = (await request.post(
-        `/question-types/${questionTypeId}/preface-items/${itemIndex}/synthesize`,
-        { voice: selectedVoice }
-      )) as { code: number; message: string; data?: { audio_url: string } }
-      if (response?.code === 200 && response.data?.audio_url) {
-        setPrefaceList((prev) =>
-          prev.map((qt) =>
-            qt.id === questionTypeId
-              ? {
-                  ...qt,
-                  items: qt.items.map((it) =>
-                    it.index === itemIndex ? { ...it, audio_url: response.data!.audio_url } : it
-                  ),
-                }
-              : qt
-          )
-        )
+        `/question-types/${questionTypeId}/preface-items/synthesize-all`,
+        { voice: selectedVoice },
+        { timeout: 300000 }
+      )) as { code: number; message: string; data?: { results: Array<{ index: number; audio_url: string }>, errors: string[] } }
+
+      if (response?.code === 200) {
+        // 重新加载列表以获取更新后的音频URL
+        await loadPrefaceItems()
+        const successCount = response.data?.results?.length || 0
+        const errorCount = response.data?.errors?.length || 0
+        if (errorCount > 0) {
+          toast.warning(`语音生成完成：成功 ${successCount} 个，失败 ${errorCount} 个`)
+        } else {
+          toast.success(`语音生成成功！共生成 ${successCount} 个语音。`)
+        }
+      } else {
+        toast.error(response?.message || '生成失败')
       }
     } catch (e) {
-      console.error('Preface synthesize failed:', e)
-      alert((e as Error)?.message || '生成失败')
+      console.error('Preface synthesize all failed:', e)
+      setAudioError((e as Error)?.message || '生成失败')
+      toast.error((e as Error)?.message || '生成失败')
     } finally {
       setPrefaceGeneratingKey(null)
     }
   }
 
-  const handlePrefacePlay = (audioUrl: string) => {
-    if (!audioUrl) {
-      setAudioError('暂无语音')
+  // 批量播放所有旁白语音
+  const handlePrefacePlayAll = async (
+    questionTypeId: number,
+    items: Array<{ index: number; audio_url: string; content: string }>
+  ) => {
+    const playingKey = `${questionTypeId}-all`
+
+    // 如果正在播放，则停止
+    if (playingAudioUrl === playingKey) {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause()
+        currentAudioRef.current = null
+      }
+      if (prefaceObjectUrlRef.current) {
+        URL.revokeObjectURL(prefaceObjectUrlRef.current)
+        prefaceObjectUrlRef.current = null
+      }
+      if (prefaceAbortControllerRef.current) {
+        prefaceAbortControllerRef.current.abort()
+        prefaceAbortControllerRef.current = null
+      }
+      setPlayingAudioUrl(null)
       return
     }
+
+    // 过滤出有音频URL的项
+    const playableItems = items.filter(item => item.audio_url)
+
+    if (playableItems.length === 0) {
+      setAudioError('暂无语音可播放')
+      toast.warning('请先生成语音')
+      return
+    }
+
+    // 停止之前正在播放的音频
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current = null
     }
-    setPlayingAudioUrl(audioUrl)
+    if (prefaceObjectUrlRef.current) {
+      URL.revokeObjectURL(prefaceObjectUrlRef.current)
+      prefaceObjectUrlRef.current = null
+    }
+
+    // 创建新的 AbortController
+    const abortController = new AbortController()
+    prefaceAbortControllerRef.current = abortController
+
+    setPlayingAudioUrl(playingKey)
     setAudioError(null)
-    const proxyUrl = getAudioProxyUrl(audioUrl)
-    const audio = new Audio(proxyUrl)
-    currentAudioRef.current = audio
-    audio.play().catch((e) => {
-      setAudioError(e?.message || '播放失败')
-    })
-    audio.onended = () => {
+
+    const token = localStorage.getItem('token')
+
+    try {
+      // 依次播放每个音频
+      for (const item of playableItems) {
+        // 检查是否被中断
+        if (abortController.signal.aborted) {
+          break
+        }
+
+        try {
+          const proxyUrl = getAudioProxyUrl(item.audio_url)
+          const res = await fetch(proxyUrl, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          })
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+          }
+
+          const blob = await res.blob()
+          const objectUrl = URL.createObjectURL(blob)
+          prefaceObjectUrlRef.current = objectUrl
+
+          await new Promise<void>((resolve, reject) => {
+            // 检查是否被中断
+            if (abortController.signal.aborted) {
+              URL.revokeObjectURL(objectUrl)
+              prefaceObjectUrlRef.current = null
+              resolve()
+              return
+            }
+
+            const audio = new Audio(objectUrl)
+            currentAudioRef.current = audio
+
+            audio.onended = () => {
+              URL.revokeObjectURL(objectUrl)
+              prefaceObjectUrlRef.current = null
+              currentAudioRef.current = null
+              resolve()
+            }
+
+            audio.onerror = () => {
+              console.error('Audio playback error:', item.audio_url)
+              URL.revokeObjectURL(objectUrl)
+              prefaceObjectUrlRef.current = null
+              currentAudioRef.current = null
+              reject(new Error(`播放失败：${item.content?.substring(0, 20)}...`))
+            }
+
+            audio.play().catch(reject)
+
+            // 监听中断信号
+            abortController.signal.addEventListener('abort', () => {
+              audio.pause()
+              URL.revokeObjectURL(objectUrl)
+              prefaceObjectUrlRef.current = null
+              currentAudioRef.current = null
+              resolve()
+            })
+          })
+        } catch (e) {
+          // 如果是中断错误，不显示提示
+          if (abortController.signal.aborted) {
+            break
+          }
+          console.error('Audio playback error:', e)
+          setAudioError(`播放失败：${(e as Error)?.message || '请检查网络连接'}`)
+          toast.error(`播放失败：${(e as Error)?.message || '请检查网络连接'}`)
+          break
+        }
+      }
+    } finally {
+      prefaceAbortControllerRef.current = null
       setPlayingAudioUrl(null)
-      currentAudioRef.current = null
     }
   }
 
@@ -484,8 +640,8 @@ export default function QuestionManagement() {
     return questions.filter((q) => {
       // 模式筛选
       if (mode !== 'all' && q.mode !== mode) return false
-      // 题型筛选
-      if (mode === 'practice' && questionType !== 'all' && q.type !== questionType) return false
+      // 题型筛选（移除 mode 限制，直接按题型筛选）
+      if (questionType !== 'all' && q.type !== questionType) return false
       if (mode === 'exam' && q.type !== 'exam') return false
       // 是否启用筛选
       if (isActive !== 'all') {
@@ -695,23 +851,25 @@ export default function QuestionManagement() {
     )
   }
 
-  // 编辑时调用后端单独生成语音，成功后回调 onGenerated(audio_url)；生成结果仅更新表单状态，保存题目时一并持久化
-  const handleGenerateAudio = async (text: string, index: number, onGenerated: (url: string) => void) => {
+  // 编辑时调用后端单独生成语音，成功后回调 onGenerated(audio_url, duration)；生成结果仅更新表单状态，保存题目时一并持久化
+  const handleGenerateAudio = async (text: string, index: number, onGenerated: (url: string, duration?: number) => void) => {
     if (!editingQuestionId || !text?.trim()) return
     const key = `${editingQuestionId}_${index}`
     setGeneratingAudioKey(key)
     setAudioError(null)
     try {
-      const res = (await request.post(`/questions/${editingQuestionId}/generate-audio`, { text: text.trim(), index })) as { data?: { audio_url?: string } }
+      // 为语音生成请求设置更长的超时时间（90秒），因为 TTS 合成可能需要较长时间
+      const res = (await request.post(`/questions/${editingQuestionId}/generate-audio`, { text: text.trim(), index }, { timeout: 90000 })) as { data?: { audio_url?: string; duration?: number } }
       const url = res?.data?.audio_url
+      const duration = res?.data?.duration
       if (url) {
-        onGenerated(url)
-        alert('语音生成成功，可点击播放试听。保存题目后语音地址会一并保存。')
+        onGenerated(url, duration)
+        toast.success('语音生成成功，可点击播放试听。保存题目后语音地址会一并保存。')
       } else {
-        alert('生成成功但未返回语音地址')
+        toast.error('生成成功但未返回语音地址')
       }
     } catch (e: any) {
-      alert(e?.message || '语音生成失败')
+      toast.error(e?.message || '语音生成失败')
     } finally {
       setGeneratingAudioKey(null)
     }
@@ -737,38 +895,48 @@ export default function QuestionManagement() {
           <button
             type="button"
             disabled={isGenerating}
-            onClick={() => handleGenerateAudio(text, index, (url) => {
-              if (actionKey === 'imitation') setImitationForm((f) => ({ ...f, audio_url: url }))
+            onClick={() => handleGenerateAudio(text, index, (url, duration) => {
+              if (actionKey === 'imitation') setImitationForm((f) => ({ ...f, audio_url: url, duration }))  // 🔥 保存 duration
               else if (actionKey.startsWith('listening_')) {
                 const [_, di, part] = actionKey.split('_')
                 const diIdx = parseInt(di, 10)
                 if (part === 'text') {
                   setListeningForm((f) => {
                     const d = [...f.dialogues]
-                    d[diIdx] = { ...d[diIdx], textAudioUrl: url }
+                    d[diIdx] = { ...d[diIdx], textAudioUrl: url, textDuration: duration }
                     return { ...f, dialogues: d }
                   })
                 } else if (part?.startsWith('q')) {
                   const qIdx = parseInt(part.slice(1), 10)
                   setListeningForm((f) => {
                     const d = [...f.dialogues]
-                    const prev = d[diIdx].questionsAudioUrl || ['', '']
-                    const next = [...prev] as [string, string]
-                    next[qIdx] = url
-                    d[diIdx] = { ...d[diIdx], questionsAudioUrl: next }
+                    const prevUrl = d[diIdx].questionsAudioUrl || ['', '']
+                    const prevDur = d[diIdx].questionsDuration || [0, 0]
+                    const nextUrl = [...prevUrl] as [string, string]
+                    const nextDur = [...prevDur] as [number, number]
+                    nextUrl[qIdx] = url
+                    nextDur[qIdx] = duration ?? 0
+                    d[diIdx] = { ...d[diIdx], questionsAudioUrl: nextUrl, questionsDuration: nextDur }
                     return { ...f, dialogues: d }
                   })
                 }
               } else if (actionKey === 'answering_text') {
-                setAnsweringForm((f) => ({ ...f, textAudioUrl: url }))
+                setAnsweringForm((f) => ({ ...f, textAudioUrl: url, textDuration: duration }))
               } else if (actionKey.startsWith('answering_q')) {
                 const qIdx = parseInt(actionKey.slice('answering_q'.length), 10)
                 setAnsweringForm((f) => {
-                  const prev = f.questionsAudioUrl || ['', '', '', '']
-                  const next = [...prev] as [string, string, string, string]
-                  next[qIdx] = url
-                  return { ...f, questionsAudioUrl: next }
+                  const prevUrl = f.questionsAudioUrl || ['', '', '', '']
+                  const prevDur = f.questionsDuration || [0, 0, 0, 0]
+                  const nextUrl = [...prevUrl] as [string, string, string, string]
+                  const nextDur = [...prevDur] as [number, number, number, number]
+                  nextUrl[qIdx] = url
+                  nextDur[qIdx] = duration ?? 0
+                  return { ...f, questionsAudioUrl: nextUrl, questionsDuration: nextDur }
                 })
+              } else if (actionKey === 'retelling_theme') {
+                setRetellingForm((f) => ({ ...f, themeAudioUrl: url, themeDuration: duration ?? 0 }))
+              } else if (actionKey === 'retelling_text') {
+                setRetellingForm((f) => ({ ...f, textAudioUrl: url, textDuration: duration ?? 0 }))
               } else if (actionKey.startsWith('retelling_q')) {
                 const qIdx = parseInt(actionKey.slice('retelling_q'.length), 10)
                 setRetellingForm((f) => {
@@ -806,7 +974,7 @@ export default function QuestionManagement() {
   }
 
   // 开始新增题目
-  const handleStartAdd = (type: 'imitation' | 'listening' | 'answering' | 'retelling') => {
+  const handleStartAdd = async (type: 'imitation' | 'listening' | 'answering' | 'retelling') => {
     setNewQuestionType(type)
     setIsAdding(true)
     setIsEditing(false)
@@ -820,15 +988,32 @@ export default function QuestionManagement() {
         content: '',
       })
     } else if (type === 'listening') {
+      // Load narration from t_question_types for new listening questions
+      let narrationItems: Array<{ index: number; content: string; audio_url: string }> = []
+      try {
+        const prefaceResponse = (await request.get('/question-types/preface-items')) as {
+          code: number
+          message: string
+          data: Array<{ id: number; type_code: string; type_name: string; items: Array<{ index: number; content: string; audio_url: string }> }>
+        }
+        if (prefaceResponse?.code === 200 && Array.isArray(prefaceResponse.data)) {
+          const listeningType = prefaceResponse.data.find((qt: any) => qt.type_code === 'listening')
+          narrationItems = listeningType?.items || []
+        }
+      } catch (e) {
+        console.error('Failed to load narration items:', e)
+      }
+
       setListeningForm({
         title: '',
         mode: 'unset',
         type: 'listening',
         difficulty: 3, // 1-5 整数，默认3
+        narrationItems,
         dialogues: [
-          { text: '', questions: ['', ''] },
-          { text: '', questions: ['', ''] },
-          { text: '', questions: ['', ''] },
+          { text: '', textAudioUrl: '', questions: ['', ''] },
+          { text: '', textAudioUrl: '', questions: ['', ''] },
+          { text: '', textAudioUrl: '', questions: ['', ''] },
         ],
       })
     } else if (type === 'answering') {
@@ -847,6 +1032,11 @@ export default function QuestionManagement() {
         type: 'retelling',
         difficulty: 3, // 1-5 整数，默认3
         theme: '',
+        themeAudioUrl: '',
+        themeDuration: 0,
+        content: '',
+        textAudioUrl: '',
+        textDuration: 0,
         example: '',
         img_url: '',
         questions: ['', ''],
@@ -879,7 +1069,26 @@ export default function QuestionManagement() {
       
       if (response && response.code === 200 && response.data) {
         const q = response.data
-        // 更新viewingQuestion状态，包含完整的content_json
+
+        // Load narration items for listening questions
+        let narrationItems: Array<{ index: number; content: string; audio_url: string }> = []
+        if (q.type === 'listening') {
+          try {
+            const prefaceResponse = (await request.get('/question-types/preface-items')) as {
+              code: number
+              message: string
+              data: Array<{ id: number; type_code: string; type_name: string; items: Array<{ index: number; content: string; audio_url: string }> }>
+            }
+            if (prefaceResponse?.code === 200 && Array.isArray(prefaceResponse.data)) {
+              const listeningType = prefaceResponse.data.find((qt: any) => qt.type_code === 'listening')
+              narrationItems = listeningType?.items || []
+            }
+          } catch (e) {
+            console.error('Failed to load narration items:', e)
+          }
+        }
+
+        // 更新viewingQuestion状态，包含完整的content_json和narrationItems
         setViewingQuestion({
           id: q.id.toString(),
           title: q.title,
@@ -890,11 +1099,12 @@ export default function QuestionManagement() {
           is_active: q.is_active !== undefined ? q.is_active : true,
           usage_type: q.usage_type !== undefined ? q.usage_type : 0,
           content_json: q.content_json, // 包含完整的content_json
+          narrationItems, // 包含旁白项目
         })
       }
     } catch (error) {
       console.error('Failed to load question:', error)
-      alert('加载题目失败')
+      toast.error('加载题目失败')
       setIsViewing(false)
     }
   }
@@ -942,25 +1152,48 @@ export default function QuestionManagement() {
             difficulty: formDifficulty,
             content: q.content_json?.content || '',
             audio_url: q.content_json?.audio_url || '',
+            duration: q.content_json?.duration,  // 🔥 读取 duration
           })
         } else if (q.type === 'listening') {
+          // Load narration from t_question_types for listening (question_type_id = 2)
+          let narrationItems: Array<{ index: number; content: string; audio_url: string }> = []
+          try {
+            const prefaceResponse = (await request.get('/question-types/preface-items')) as {
+              code: number
+              message: string
+              data: Array<{ id: number; type_code: string; type_name: string; items: Array<{ index: number; content: string; audio_url: string }> }>
+            }
+            if (prefaceResponse?.code === 200 && Array.isArray(prefaceResponse.data)) {
+              const listeningType = prefaceResponse.data.find((qt: any) => qt.type_code === 'listening')
+              narrationItems = listeningType?.items || []
+            }
+          } catch (e) {
+            console.error('Failed to load narration items:', e)
+          }
+
           const dialogues = Array.isArray(q.content_json) ? q.content_json : []
           setListeningForm({
             title: q.title,
             mode,
             type: 'listening',
             difficulty: formDifficulty,
+            narrationItems,
             dialogues: dialogues.map((d: any) => ({
               text: d.text?.content || '',
+              textAudioUrl: d.text?.audio_url || '',
+              textDuration: d.text?.duration ?? 0,
               questions: [
                 d.questions?.[0]?.content || '',
                 d.questions?.[1]?.content || '',
               ] as [string, string],
-              textAudioUrl: d.text?.audio_url || '',
               questionsAudioUrl: [
                 d.questions?.[0]?.audio_url || '',
                 d.questions?.[1]?.audio_url || '',
               ] as [string, string],
+              questionsDuration: [
+                d.questions?.[0]?.duration ?? 0,
+                d.questions?.[1]?.duration ?? 0,
+              ] as [number, number],
             })),
           })
         } else if (q.type === 'answering') {
@@ -977,12 +1210,19 @@ export default function QuestionManagement() {
               q.content_json?.questions?.[3]?.content || '',
             ] as [string, string, string, string],
             textAudioUrl: q.content_json?.text?.audio_url || '',
+            textDuration: q.content_json?.text?.duration,
             questionsAudioUrl: [
               q.content_json?.questions?.[0]?.audio_url || '',
               q.content_json?.questions?.[1]?.audio_url || '',
               q.content_json?.questions?.[2]?.audio_url || '',
               q.content_json?.questions?.[3]?.audio_url || '',
             ] as [string, string, string, string],
+            questionsDuration: [
+              q.content_json?.questions?.[0]?.duration ?? 0,
+              q.content_json?.questions?.[1]?.duration ?? 0,
+              q.content_json?.questions?.[2]?.duration ?? 0,
+              q.content_json?.questions?.[3]?.duration ?? 0,
+            ] as [number, number, number, number],
           })
         } else if (q.type === 'retelling') {
           setRetellingForm({
@@ -991,6 +1231,11 @@ export default function QuestionManagement() {
             type: 'retelling',
             difficulty: formDifficulty,
             theme: q.content_json?.text?.theme || '',
+            themeAudioUrl: q.content_json?.text?.theme_audio_url || '',
+            themeDuration: q.content_json?.text?.theme_duration ?? 0,
+            content: q.content_json?.text?.content || '',
+            textAudioUrl: q.content_json?.text?.audio_url || '',
+            textDuration: q.content_json?.text?.duration ?? 0,
             example: q.content_json?.text?.example || '',
             img_url: q.content_json?.text?.img_url || '',
             questions: [
@@ -1006,7 +1251,7 @@ export default function QuestionManagement() {
       }
     } catch (error) {
       console.error('Failed to load question:', error)
-      alert('加载题目失败')
+      toast.error('加载题目失败')
     }
   }
 
@@ -1023,14 +1268,18 @@ export default function QuestionManagement() {
   // 保存新增 - 模仿朗读
   const handleSaveImitation = async () => {
     if (!imitationForm.title || !imitationForm.content) {
-      alert('请填写完整信息')
+      toast.warning('请填写完整信息')
       return
     }
 
     try {
-      const contentJson = {
+      const contentJson: any = {
         content: imitationForm.content,
         audio_url: imitationForm.audio_url || '', // 后端规则：无语音则生成，文本有修改则重新生成
+      }
+      // 🔥 如果有时长，则保存到 content_json
+      if (imitationForm.duration !== undefined) {
+        contentJson.duration = imitationForm.duration
       }
 
       const requestData: any = {
@@ -1039,7 +1288,7 @@ export default function QuestionManagement() {
         difficulty: imitationForm.difficulty,
         content_json: contentJson,
       }
-      
+
       // 在编辑模式下总是传递 mode，以便正确更新 usage_type
       // 在新增模式下，如果 mode 是 'unset' 则不传递（使用默认值）
       if (isEditing || imitationForm.mode !== 'unset') {
@@ -1054,24 +1303,31 @@ export default function QuestionManagement() {
 
       await loadQuestions()
       handleCancelAdd()
+      toast.success('保存成功')
     } catch (err: any) {
-      alert(err.message || '创建失败')
+      toast.error(err.message || '创建失败')
     }
   }
 
   // 保存新增 - 听选信息
   const handleSaveListening = async () => {
     if (!listeningForm.title) {
-      alert('请填写题目标题')
+      toast.warning('请填写题目标题')
       return
     }
 
-    // 验证所有对话和问题都已填写
+    // 验证所有短文和问题都已填写
+    const hasEmptyText = listeningForm.dialogues.some((d) => !d.text)
+    if (hasEmptyText) {
+      toast.warning('请填写所有短文文本')
+      return
+    }
+
     const hasEmpty = listeningForm.dialogues.some(
-      (d) => !d.text || !d.questions[0] || !d.questions[1]
+      (d) => !d.questions[0] || !d.questions[1]
     )
     if (hasEmpty) {
-      alert('请填写所有对话内容和问题')
+      toast.warning('请填写所有问题')
       return
     }
 
@@ -1080,10 +1336,12 @@ export default function QuestionManagement() {
         text: {
           content: dialogue.text,
           audio_url: dialogue.textAudioUrl || '',
+          duration: dialogue.textDuration ?? 0,
         },
         questions: (dialogue.questionsAudioUrl ?? dialogue.questions.map(() => '')).map((url, i) => ({
           content: dialogue.questions[i],
           audio_url: url || '',
+          duration: dialogue.questionsDuration?.[i] ?? 0,
         })),
       }))
 
@@ -1093,7 +1351,7 @@ export default function QuestionManagement() {
         difficulty: listeningForm.difficulty,
         content_json: contentJson,
       }
-      
+
       // 在编辑模式下总是传递 mode，以便正确更新 usage_type
       // 在新增模式下，如果 mode 是 'unset' 则不传递（使用默认值）
       if (isEditing || listeningForm.mode !== 'unset') {
@@ -1108,22 +1366,23 @@ export default function QuestionManagement() {
 
       await loadQuestions()
       handleCancelAdd()
+      toast.success('保存成功')
     } catch (err: any) {
-      alert(err.message || '创建失败')
+      toast.error(err.message || '创建失败')
     }
   }
 
   // 保存新增 - 回答问题
   const handleSaveAnswering = async () => {
     if (!answeringForm.title || !answeringForm.text) {
-      alert('请填写题目标题和短文文本内容')
+      toast.warning('请填写题目标题和短文文本内容')
       return
     }
 
     // 验证所有问题都已填写
     const hasEmpty = answeringForm.questions.some((q) => !q)
     if (hasEmpty) {
-      alert('请填写所有问题')
+      toast.warning('请填写所有问题')
       return
     }
 
@@ -1132,10 +1391,12 @@ export default function QuestionManagement() {
         text: {
           content: answeringForm.text,
           audio_url: answeringForm.textAudioUrl || '',
+          duration: answeringForm.textDuration ?? 0,
         },
         questions: (answeringForm.questionsAudioUrl ?? answeringForm.questions.map(() => '')).map((url, i) => ({
           content: answeringForm.questions[i],
           audio_url: url || '',
+          duration: answeringForm.questionsDuration?.[i] ?? 0,
         })),
       }
 
@@ -1145,7 +1406,7 @@ export default function QuestionManagement() {
         difficulty: answeringForm.difficulty,
         content_json: contentJson,
       }
-      
+
       // 在编辑模式下总是传递 mode，以便正确更新 usage_type
       // 在新增模式下，如果 mode 是 'unset' 则不传递（使用默认值）
       if (isEditing || answeringForm.mode !== 'unset') {
@@ -1160,22 +1421,23 @@ export default function QuestionManagement() {
 
       await loadQuestions()
       handleCancelAdd()
+      toast.success('保存成功')
     } catch (err: any) {
-      alert(err.message || '创建失败')
+      toast.error(err.message || '创建失败')
     }
   }
 
   // 保存新增 - 短文复述及提问
   const handleSaveRetelling = async () => {
-    if (!retellingForm.title || !retellingForm.theme || !retellingForm.example) {
-      alert('请填写题目标题、主题和示例文本')
+    if (!retellingForm.title || !retellingForm.theme || !retellingForm.content || !retellingForm.example) {
+      toast.warning('请填写题目标题、主题、短文内容和样例')
       return
     }
 
     // 验证所有问题都已填写
     const hasEmpty = retellingForm.questions.some((q) => !q)
     if (hasEmpty) {
-      alert('请填写所有问题')
+      toast.warning('请填写所有问题')
       return
     }
 
@@ -1183,6 +1445,11 @@ export default function QuestionManagement() {
       const contentJson = {
         text: {
           theme: retellingForm.theme,
+          theme_audio_url: retellingForm.themeAudioUrl || '',
+          theme_duration: retellingForm.themeDuration ?? 0,
+          content: retellingForm.content,
+          audio_url: retellingForm.textAudioUrl || '',
+          duration: retellingForm.textDuration ?? 0,
           example: retellingForm.example,
           img_url: retellingForm.img_url || '', // 图片URL可选
         },
@@ -1213,8 +1480,9 @@ export default function QuestionManagement() {
 
       await loadQuestions()
       handleCancelAdd()
+      toast.success('保存成功')
     } catch (err: any) {
-      alert(err.message || '创建失败')
+      toast.error(err.message || '创建失败')
     }
   }
 
@@ -1244,23 +1512,23 @@ export default function QuestionManagement() {
   // 保存新增试卷
   const handleSavePaper = async () => {
     if (!examPaperForm.name) {
-      alert('请填写试卷名称')
+      toast.warning('请填写试卷名称')
       return
     }
 
     // 验证所有题型都已选择题目
     const { questions } = examPaperForm
-    if (!questions.imitation.questionId || !questions.listening.questionId || 
+    if (!questions.imitation.questionId || !questions.listening.questionId ||
         !questions.answering.questionId || !questions.retelling.questionId) {
-      alert('请为所有题型选择题目')
+      toast.warning('请为所有题型选择题目')
       return
     }
 
     // 验证总分是否等于各题分值之和
-    const totalScore = questions.imitation.score + questions.listening.score + 
+    const totalScore = questions.imitation.score + questions.listening.score +
                       questions.answering.score + questions.retelling.score
     if (Math.abs(totalScore - examPaperForm.total_score) > 0.01) {
-      alert(`各题分值之和（${totalScore}）与试卷总分（${examPaperForm.total_score}）不一致`)
+      toast.warning(`各题分值之和（${totalScore}）与试卷总分（${examPaperForm.total_score}）不一致`)
       return
     }
 
@@ -1323,12 +1591,12 @@ export default function QuestionManagement() {
           await request.post('/paper-questions', pq)
         }
 
-        alert('试卷创建成功')
+        toast.success('试卷创建成功')
         handleCancelAddPaper()
         // 可以在这里刷新试卷列表
       }
     } catch (err: any) {
-      alert(err.message || '创建失败')
+      toast.error(err.message || '创建失败')
     }
   }
 
@@ -1622,29 +1890,49 @@ export default function QuestionManagement() {
                   </div>
                 )
               } else if (viewingQuestion.type === 'listening' && Array.isArray(contentJson)) {
+                // For listening questions, narration and its audio come from t_question_types.preface_text
+                // Questions come from t_questions.content_json
                 return (
                   <div>
                     <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
-                      对话和问题内容
+                      旁白和问题内容
                     </label>
+                    {/* Display narration from t_question_types.preface_text */}
+                    {viewingQuestion.narrationItems && viewingQuestion.narrationItems.length > 0 && (
+                      <div style={{ marginBottom: 16, padding: '1rem', borderRadius: 8, backgroundColor: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#0369a1' }}>旁白（来自题型配置）</div>
+                        {viewingQuestion.narrationItems.map((item, idx) => (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 13, color: '#1f2937' }}>
+                            <span style={{ fontWeight: 600, minWidth: 60 }}>旁白 {idx + 1}:</span>
+                            <span style={{ flex: 1, fontStyle: 'italic' }}>"{item.content}"</span>
+                            {item.audio_url && renderPlayButton(item.audio_url, `播放旁白 ${idx + 1}`)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Display dialog text and questions from t_questions.content_json */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       {contentJson.map((dialogue: any, idx: number) => (
                         <div key={idx} style={{ padding: '1rem', borderRadius: 8, backgroundColor: '#ffffff' }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#4b5563' }}>
-                            对话 {idx + 1}
+                          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#0369a1' }}>
+                            第 {idx + 1} 段
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-                            <div style={{ fontSize: 13, color: '#1f2937', whiteSpace: 'pre-wrap', flex: 1, minWidth: 0 }}>
-                              {dialogue.text?.content || ''}
+                          {/* 短文文本 */}
+                          {dialogue.text && (
+                            <div style={{ marginBottom: 12, padding: '0.75rem', borderRadius: 6, backgroundColor: '#f0f9ff', fontSize: 13 }}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600, color: '#0369a1' }}>短文</span>
+                                {dialogue.text.audio_url && renderPlayButton(dialogue.text.audio_url, `播放短文 ${idx + 1} 语音`)}
+                              </div>
+                              <div style={{ color: '#1f2937', whiteSpace: 'pre-wrap' }}>{dialogue.text.content || ''}</div>
                             </div>
-                            {renderPlayButton(dialogue.text?.audio_url, `播放对话 ${idx + 1} 语音`)}
-                          </div>
+                          )}
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                             {dialogue.questions?.map((q: any, qIdx: number) => (
                               <div key={qIdx} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, padding: '0.75rem', borderRadius: 6, backgroundColor: '#f9fafb', fontSize: 12 }}>
-                                <span style={{ fontWeight: 600, color: '#6b7280' }}>问题 {qIdx + 1}:</span>
+                                <span style={{ fontWeight: 600, color: '#6b7280' }}>问题 {idx * 2 + qIdx + 1}:</span>
                                 <span style={{ flex: 1, minWidth: 0 }}>{q.content || ''}</span>
-                                {renderPlayButton(q.audio_url, `播放问题 ${qIdx + 1} 语音`)}
+                                {renderPlayButton(q.audio_url, `播放问题 ${idx * 2 + qIdx + 1} 语音`)}
                               </div>
                             ))}
                           </div>
@@ -1953,8 +2241,24 @@ export default function QuestionManagement() {
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-                  对话内容（共3段对话，每段包含对话文本和2个问题）*
+                  内容（共3段，每段包含短文文本和2个问题）*
                 </label>
+                <div style={{ marginBottom: 16, padding: '0.75rem 1rem', borderRadius: 8, backgroundColor: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                  <div style={{ fontSize: 12, color: '#0369a1', marginBottom: 8 }}>
+                    ℹ️ 旁白（整体介绍）请在"旁白语音"页签中管理，此处编辑每段的短文文本和问题
+                  </div>
+                  {listeningForm.narrationItems && listeningForm.narrationItems.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      {listeningForm.narrationItems.map((item, idx) => (
+                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontSize: 12, color: '#4b5563' }}>
+                          <span style={{ fontWeight: 600, minWidth: 60 }}>旁白 {idx + 1}:</span>
+                          <span style={{ flex: 1, fontStyle: 'italic' }}>"{item.content}"</span>
+                          {item.audio_url && renderPlayButton(item.audio_url, `播放旁白 ${idx + 1}`)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {listeningForm.dialogues.map((dialogue, index) => (
                   <div
                     key={index}
@@ -1967,42 +2271,44 @@ export default function QuestionManagement() {
                     }}
                   >
                     <h4 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
-                      第 {index + 1} 段对话
+                      第 {index + 1} 段
                     </h4>
-                    <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
-                        对话文本 *
-                </label>
-                <textarea
+                    {/* 短文文本 */}
+                    <div style={{ marginBottom: 16 }}>
+                      <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                        短文文本 *
+                      </label>
+                      <textarea
                         value={dialogue.text}
                         onChange={(e) => {
                           const newDialogues = [...listeningForm.dialogues]
                           newDialogues[index].text = e.target.value
                           setListeningForm({ ...listeningForm, dialogues: newDialogues })
                         }}
-                        placeholder="请输入对话文本内容"
+                        placeholder="请输入短文文本"
                         rows={3}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem 0.75rem',
-                    borderRadius: 8,
-                    border: '1px solid #e5e7eb',
-                    fontSize: 13,
-                    fontFamily: 'inherit',
-                    resize: 'vertical',
-                  }}
-                />
-                {renderEditAudioActions(dialogue.textAudioUrl, {
-                  text: dialogue.text,
-                  index: index * 3,
-                  actionKey: `listening_${index}_text`,
-                })}
-              </div>
+                        style={{
+                          width: '100%',
+                          padding: '0.5rem 0.75rem',
+                          borderRadius: 8,
+                          border: '1px solid #e5e7eb',
+                          fontSize: 13,
+                          resize: 'vertical',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                      {renderEditAudioActions(dialogue.textAudioUrl, {
+                        text: dialogue.text,
+                        index: index * 3,
+                        actionKey: `listening_${index}_text`,
+                      })}
+                    </div>
+                    {/* 问题1 */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
+                      <div>
                         <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
                           问题 1 *
-                </label>
+                        </label>
                         <input
                           type="text"
                           value={dialogue.questions[0]}
@@ -2020,38 +2326,39 @@ export default function QuestionManagement() {
                             fontSize: 13,
                           }}
                         />
-                {renderEditAudioActions(dialogue.questionsAudioUrl?.[0], {
-                  text: dialogue.questions[0],
-                  index: index * 3 + 1,
-                  actionKey: `listening_${index}_q0`,
-                })}
+                        {renderEditAudioActions(dialogue.questionsAudioUrl?.[0], {
+                          text: dialogue.questions[0],
+                          index: index * 3 + 1,
+                          actionKey: `listening_${index}_q0`,
+                        })}
                       </div>
+                      {/* 问题2 */}
                       <div>
-                    <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                        <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
                           问题 2 *
-                    </label>
-                    <input
-                      type="text"
+                        </label>
+                        <input
+                          type="text"
                           value={dialogue.questions[1]}
-                      onChange={(e) => {
+                          onChange={(e) => {
                             const newDialogues = [...listeningForm.dialogues]
                             newDialogues[index].questions[1] = e.target.value
                             setListeningForm({ ...listeningForm, dialogues: newDialogues })
-                      }}
+                          }}
                           placeholder="请输入第二个问题"
-                      style={{
-                        width: '100%',
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: 8,
-                        border: '1px solid #e5e7eb',
-                        fontSize: 13,
-                      }}
-                    />
-                {renderEditAudioActions(dialogue.questionsAudioUrl?.[1], {
-                  text: dialogue.questions[1],
-                  index: index * 3 + 2,
-                  actionKey: `listening_${index}_q1`,
-                })}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem 0.75rem',
+                            borderRadius: 8,
+                            border: '1px solid #e5e7eb',
+                            fontSize: 13,
+                          }}
+                        />
+                        {renderEditAudioActions(dialogue.questionsAudioUrl?.[1], {
+                          text: dialogue.questions[1],
+                          index: index * 3 + 2,
+                          actionKey: `listening_${index}_q1`,
+                        })}
                       </div>
                     </div>
                   </div>
@@ -2351,15 +2658,25 @@ export default function QuestionManagement() {
                     fontSize: 13,
                   }}
                 />
+                {retellingForm.theme && (
+                  <div style={{ fontSize: 12, color: '#3b82f6', marginTop: 4 }}>
+                    你将听到"{retellingForm.theme}"，录音播放两遍
+                  </div>
+                )}
+                {renderEditAudioActions(retellingForm.themeAudioUrl, {
+                  text: retellingForm.theme,
+                  index: 99,
+                  actionKey: 'retelling_theme',
+                })}
               </div>
               <div>
                       <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
-                  示例文本内容（英文短文）*
+                  短文内容*
                       </label>
                       <textarea
-                  value={retellingForm.example}
-                  onChange={(e) => setRetellingForm({ ...retellingForm, example: e.target.value })}
-                  placeholder="请输入示例文本内容（英文短文）"
+                  value={retellingForm.content}
+                  onChange={(e) => setRetellingForm({ ...retellingForm, content: e.target.value })}
+                  placeholder="请输入短文内容"
                   rows={6}
                         style={{
                           width: '100%',
@@ -2371,7 +2688,37 @@ export default function QuestionManagement() {
                           resize: 'vertical',
                         }}
                       />
+                {renderEditAudioActions(retellingForm.textAudioUrl, {
+                  text: retellingForm.content,
+                  index: 100,
+                  actionKey: 'retelling_text',
+                })}
                     </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                  样例
+                </label>
+                <textarea
+                  value={retellingForm.example}
+                  onChange={(e) => setRetellingForm({ ...retellingForm, example: e.target.value })}
+                  placeholder="请输入样例内容"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem 0.75rem',
+                    borderRadius: 8,
+                    border: '1px solid #e5e7eb',
+                    fontSize: 13,
+                    fontFamily: 'inherit',
+                    resize: 'vertical',
+                  }}
+                />
+                {retellingForm.example && (
+                  <div style={{ fontSize: 12, color: '#3b82f6', marginTop: 4 }}>
+                    你的复述可以这样开始：{retellingForm.example}
+                  </div>
+                )}
+              </div>
                       <div>
                         <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
                   图片URL（可选）
@@ -2416,11 +2763,6 @@ export default function QuestionManagement() {
                             fontSize: 13,
                           }}
                         />
-                    {renderEditAudioActions(retellingForm.questionsAudioUrl?.[index], {
-                      text: question,
-                      index,
-                      actionKey: `retelling_q${index}`,
-                    })}
                   </div>
                 ))}
               </div>
@@ -3069,96 +3411,149 @@ export default function QuestionManagement() {
             </select>
           </div>
 
+          {/* 错误提示 */}
+          {audioError && (
+            <div style={{
+              marginBottom: 16,
+              padding: '0.75rem 1rem',
+              borderRadius: 8,
+              backgroundColor: '#fee2e2',
+              border: '1px solid #fecaca',
+              color: '#991b1b',
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>⚠️</span>
+                <span>{audioError}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setAudioError(null)}
+                style={{
+                  flexShrink: 0,
+                  padding: '0.25rem 0.75rem',
+                  fontSize: 12,
+                  border: '1px solid #991b1b',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: '#991b1b',
+                  cursor: 'pointer',
+                  fontWeight: 500
+                }}
+              >
+                关闭
+              </button>
+            </div>
+          )}
+
           {prefaceLoading ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>加载中…</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-              {prefaceList.map((qt) => (
-                <section
-                  key={qt.id}
-                  style={{
-                    borderRadius: 12,
-                    border: '1px solid #e5e7eb',
-                    backgroundColor: '#ffffff',
-                    padding: '1.5rem',
-                  }}
-                >
-                  <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>{qt.type_name}</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {qt.items.map((item) => {
-                      const genKey = `${qt.id}-${item.index}`
-                      const isGenerating = prefaceGeneratingKey === genKey
-                      const canPlay = !!item.audio_url
-                      return (
-                        <div
-                          key={item.index}
+              {prefaceList.map((qt) => {
+                const isGeneratingAll = prefaceGeneratingKey === `${qt.id}-all`
+                const isPlayingAll = playingAudioUrl === `${qt.id}-all`
+                const hasAllAudio = qt.items.length > 0 && qt.items.every(item => item.audio_url)
+                const hasAnyAudio = qt.items.some(item => item.audio_url)
+
+                return (
+                  <section
+                    key={qt.id}
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid #e5e7eb',
+                      backgroundColor: '#ffffff',
+                      padding: '1.5rem',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{qt.type_name}</h3>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          disabled={isGeneratingAll}
+                          onClick={() => handlePrefaceGenerateAll(qt.id)}
                           style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 12,
-                            padding: '0.75rem',
-                            borderRadius: 8,
-                            backgroundColor: '#f9fafb',
-                            border: '1px solid #e5e7eb',
+                            padding: '0.4rem 0.75rem',
+                            borderRadius: 6,
+                            border: 'none',
+                            backgroundColor: isGeneratingAll ? '#9ca3af' : '#3b82f6',
+                            color: '#ffffff',
+                            fontSize: 12,
+                            cursor: isGeneratingAll ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div
-                              style={{
-                                fontSize: 13,
-                                color: '#374151',
-                                lineHeight: 1.5,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 3,
-                                WebkitBoxOrient: 'vertical' as const,
-                              }}
-                              title={item.content}
-                            >
-                              {item.content || '（无内容）'}
+                          {isGeneratingAll ? '生成中…' : '全部生成'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!hasAnyAudio}
+                          onClick={() => handlePrefacePlayAll(qt.id, qt.items)}
+                          style={{
+                            padding: '0.4rem 0.75rem',
+                            borderRadius: 6,
+                            border: isPlayingAll ? '1px solid #3b82f6' : '1px solid #d1d5db',
+                            backgroundColor: isPlayingAll ? '#eff6ff' : hasAnyAudio ? '#ffffff' : '#f3f4f6',
+                            color: isPlayingAll ? '#1e40af' : hasAnyAudio ? '#374151' : '#9ca3af',
+                            fontSize: 12,
+                            cursor: hasAnyAudio ? 'pointer' : 'not-allowed',
+                            fontWeight: isPlayingAll ? 500 : 400,
+                          }}
+                        >
+                          {isPlayingAll ? '播放中' : hasAllAudio ? '全部播放' : '播放已生成'}
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {qt.items.map((item) => {
+                        const canPlay = !!item.audio_url
+                        return (
+                          <div
+                            key={item.index}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 12,
+                              padding: '0.75rem',
+                              borderRadius: 8,
+                              backgroundColor: '#f9fafb',
+                              border: '1px solid #e5e7eb',
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>
+                                {item.index + 1}.
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 13,
+                                  color: '#374151',
+                                  lineHeight: 1.5,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 3,
+                                  WebkitBoxOrient: 'vertical' as const,
+                                }}
+                                title={item.content}
+                              >
+                                {item.content || '（无内容）'}
+                              </div>
+                              <div style={{ fontSize: 11, color: canPlay ? '#10b981' : '#9ca3af', marginTop: 4 }}>
+                                {canPlay ? '✓ 已生成语音' : '未生成语音'}
+                              </div>
                             </div>
                           </div>
-                          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                            <button
-                              type="button"
-                              disabled={isGenerating}
-                              onClick={() => handlePrefaceGenerate(qt.id, item.index)}
-                              style={{
-                                padding: '0.4rem 0.75rem',
-                                borderRadius: 6,
-                                border: 'none',
-                                backgroundColor: isGenerating ? '#9ca3af' : '#3b82f6',
-                                color: '#ffffff',
-                                fontSize: 12,
-                                cursor: isGenerating ? 'not-allowed' : 'pointer',
-                              }}
-                            >
-                              {isGenerating ? '生成中…' : '生成'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={!canPlay}
-                              onClick={() => handlePrefacePlay(item.audio_url)}
-                              style={{
-                                padding: '0.4rem 0.75rem',
-                                borderRadius: 6,
-                                border: '1px solid #d1d5db',
-                                backgroundColor: canPlay ? '#ffffff' : '#f3f4f6',
-                                color: canPlay ? '#374151' : '#9ca3af',
-                                fontSize: 12,
-                                cursor: canPlay ? 'pointer' : 'not-allowed',
-                              }}
-                            >
-                              播放
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </section>
-              ))}
+                        )
+                      })}
+                    </div>
+                  </section>
+                )
+              })}
             </div>
           )}
         </>
