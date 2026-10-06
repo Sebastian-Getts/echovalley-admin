@@ -39,6 +39,7 @@ interface ImitationFormData {
   content: string
   audio_url?: string // 语音地址，编辑时用于播放；保存时由后端按规则生成
   duration?: number // 🔥 语音时长（秒）
+  voice?: string // 🔥 音色 ID
 }
 
 // 听选信息表单数据
@@ -110,6 +111,16 @@ interface ExamPaperFormData {
   }
 }
 
+interface ExamPaperListItem {
+  id: number
+  name: string
+  description?: string
+  time_limit: number
+  total_score: number
+  is_active: boolean
+  created_at?: string
+}
+
 // 旁白语音：题型前置文本中的单条（content + audio_url）
 interface PrefaceItem {
   index: number
@@ -164,6 +175,7 @@ export default function QuestionManagement() {
     type: 'imitation',
     difficulty: 3, // 1-5 整数，默认3
     content: '',
+    voice: 'female-tianmei',
   })
   const [listeningForm, setListeningForm] = useState<ListeningFormData>({
     title: '',
@@ -208,6 +220,8 @@ export default function QuestionManagement() {
 
   // 试卷管理相关状态
   const [isAddingPaper, setIsAddingPaper] = useState(false)
+  const [examPapers, setExamPapers] = useState<ExamPaperListItem[]>([])
+  const [examPapersLoading, setExamPapersLoading] = useState(false)
   const [examPaperForm, setExamPaperForm] = useState<ExamPaperFormData>({
     name: '',
     description: '',
@@ -241,6 +255,7 @@ export default function QuestionManagement() {
   useEffect(() => {
     if (activeTab === 'papers') {
       loadAvailableQuestions()
+      loadExamPapers()
     } else if (activeTab === 'preface') {
       loadPrefaceItems()
     }
@@ -296,9 +311,14 @@ export default function QuestionManagement() {
         } else {
           // 使用 fallback 音色
           const fallbackVoices: Voice[] = [
-            { code: 'zh-CN-XiaoxiaoNeural', name: '晓晓 (中文女)', language: 'zh' },
-            { code: 'zh-CN-YunxiNeural', name: '云希 (中文男)', language: 'zh' },
-            { code: 'en-US-JennyNeural', name: 'Jenny (English Female)', language: 'en' },
+            { code: 'female-tianmei', name: '甜美女性音色', language: 'zh' },
+            { code: 'female-shaonv', name: '少女音色', language: 'zh' },
+            { code: 'male-qn-jingying', name: '精英青年音色', language: 'zh' },
+            { code: 'male-qn-badao', name: '霸道青年音色', language: 'zh' },
+            { code: 'Chinese (Mandarin)_News_Anchor', name: '新闻女声', language: 'zh' },
+            { code: 'English_Trustworthy_Man', name: 'Trustworthy Man', language: 'en' },
+            { code: 'English_Graceful_Lady', name: 'Graceful Lady', language: 'en' },
+            { code: 'Sweet_Girl', name: 'Sweet Girl', language: 'en' },
           ]
           setAvailableVoices(fallbackVoices)
           if (!selectedVoice) {
@@ -309,9 +329,14 @@ export default function QuestionManagement() {
         console.error('Failed to load voices:', e)
         // 使用 fallback 音色
         const fallbackVoices: Voice[] = [
-          { code: 'zh-CN-XiaoxiaoNeural', name: '晓晓 (中文女)', language: 'zh' },
-          { code: 'zh-CN-YunxiNeural', name: '云希 (中文男)', language: 'zh' },
-          { code: 'en-US-JennyNeural', name: 'Jenny (English Female)', language: 'en' },
+          { code: 'female-tianmei', name: '甜美女性音色', language: 'zh' },
+          { code: 'female-shaonv', name: '少女音色', language: 'zh' },
+          { code: 'male-qn-jingying', name: '精英青年音色', language: 'zh' },
+          { code: 'male-qn-badao', name: '霸道青年音色', language: 'zh' },
+          { code: 'Chinese (Mandarin)_News_Anchor', name: '新闻女声', language: 'zh' },
+          { code: 'English_Trustworthy_Man', name: 'Trustworthy Man', language: 'en' },
+          { code: 'English_Graceful_Lady', name: 'Graceful Lady', language: 'en' },
+          { code: 'Sweet_Girl', name: 'Sweet Girl', language: 'en' },
         ]
         setAvailableVoices(fallbackVoices)
         if (!selectedVoice) {
@@ -440,7 +465,7 @@ export default function QuestionManagement() {
         }
 
         try {
-          const proxyUrl = getAudioProxyUrl(item.audio_url)
+          const proxyUrl = `${getAudioProxyUrl(item.audio_url)}${getAudioProxyUrl(item.audio_url).includes('?') ? '&' : '?'}t=${Date.now()}`
           const res = await fetch(proxyUrl, {
             headers: token ? { Authorization: `Bearer ${token}` } : {}
           })
@@ -534,6 +559,9 @@ export default function QuestionManagement() {
             mode: string
             type: string
             difficulty: number
+            difficulty_float?: number
+            is_active?: boolean
+            usage_type?: number
           }>
         }
       }
@@ -547,8 +575,8 @@ export default function QuestionManagement() {
           type: string
           difficulty: number
           difficulty_float?: number
-          is_active: boolean
-          usage_type: number
+          is_active?: boolean
+          usage_type?: number
         }) => ({
           id: q.id.toString(),
           title: q.title,
@@ -590,6 +618,9 @@ export default function QuestionManagement() {
             mode: string
             type: string
             difficulty: number
+            difficulty_float?: number
+            is_active?: boolean
+            usage_type?: number
           }>
         }
       }
@@ -602,8 +633,8 @@ export default function QuestionManagement() {
           type: string
           difficulty: number
           difficulty_float?: number
-          is_active: boolean
-          usage_type: number
+          is_active?: boolean
+          usage_type?: number
         }) => ({
           id: q.id.toString(),
           title: q.title,
@@ -632,6 +663,24 @@ export default function QuestionManagement() {
         answering: [],
         retelling: [],
       })
+    }
+  }
+
+  const loadExamPapers = async () => {
+    setExamPapersLoading(true)
+    try {
+      const response = await request.get<{
+        code: number
+        message: string
+        data: { total: number; items: ExamPaperListItem[] }
+      }>('/exam-papers', { params: { page: 1, page_size: 100 } })
+      setExamPapers(response.data?.items || [])
+    } catch (error) {
+      console.error('Failed to load exam papers:', error)
+      setExamPapers([])
+      toast.error('试卷列表加载失败')
+    } finally {
+      setExamPapersLoading(false)
     }
   }
 
@@ -698,13 +747,6 @@ export default function QuestionManagement() {
     }
 
     return <div style={{ display: 'flex', gap: '2px' }}>{stars}</div>
-  }
-
-  // 难度颜色（基于1-5等级）
-  const getDifficultyColor = (difficulty: number) => {
-    if (difficulty <= 2) return '#10b981' // 绿色 - 简单
-    if (difficulty <= 3) return '#f59e0b' // 橙色 - 中等
-    return '#ef4444' // 红色 - 困难
   }
 
   // 难度标签（基于1-5等级）
@@ -852,14 +894,14 @@ export default function QuestionManagement() {
   }
 
   // 编辑时调用后端单独生成语音，成功后回调 onGenerated(audio_url, duration)；生成结果仅更新表单状态，保存题目时一并持久化
-  const handleGenerateAudio = async (text: string, index: number, onGenerated: (url: string, duration?: number) => void) => {
+  const handleGenerateAudio = async (text: string, index: number, onGenerated: (url: string, duration?: number) => void, voice?: string) => {
     if (!editingQuestionId || !text?.trim()) return
     const key = `${editingQuestionId}_${index}`
     setGeneratingAudioKey(key)
     setAudioError(null)
     try {
       // 为语音生成请求设置更长的超时时间（90秒），因为 TTS 合成可能需要较长时间
-      const res = (await request.post(`/questions/${editingQuestionId}/generate-audio`, { text: text.trim(), index }, { timeout: 90000 })) as { data?: { audio_url?: string; duration?: number } }
+      const res = (await request.post(`/questions/${editingQuestionId}/generate-audio`, { text: text.trim(), index, voice }, { timeout: 90000 })) as { data?: { audio_url?: string; duration?: number } }
       const url = res?.data?.audio_url
       const duration = res?.data?.duration
       if (url) {
@@ -883,9 +925,10 @@ export default function QuestionManagement() {
       index?: number
       actionKey?: string
       hint?: string
+      voice?: string
     } = {}
   ) => {
-    const { text = '', index = 0, actionKey = '', hint } = options
+    const { text = '', index = 0, actionKey = '', hint, voice } = options
     const canGenerate = !!editingQuestionId && !!text?.trim()
     const key = editingQuestionId ? `${editingQuestionId}_${index}` : ''
     const isGenerating = !!(key && generatingAudioKey === key)
@@ -896,7 +939,7 @@ export default function QuestionManagement() {
             type="button"
             disabled={isGenerating}
             onClick={() => handleGenerateAudio(text, index, (url, duration) => {
-              if (actionKey === 'imitation') setImitationForm((f) => ({ ...f, audio_url: url, duration }))  // 🔥 保存 duration
+              if (actionKey === 'imitation') setImitationForm((f) => ({ ...f, audio_url: url, duration, voice }))  // 🔥 保存 duration 和 voice
               else if (actionKey.startsWith('listening_')) {
                 const [_, di, part] = actionKey.split('_')
                 const diIdx = parseInt(di, 10)
@@ -986,6 +1029,7 @@ export default function QuestionManagement() {
         type: 'imitation',
         difficulty: 3, // 1-5 整数，默认3
         content: '',
+        voice: selectedVoice || 'female-tianmei',
       })
     } else if (type === 'listening') {
       // Load narration from t_question_types for new listening questions
@@ -1153,6 +1197,7 @@ export default function QuestionManagement() {
             content: q.content_json?.content || '',
             audio_url: q.content_json?.audio_url || '',
             duration: q.content_json?.duration,  // 🔥 读取 duration
+            voice: q.content_json?.voice || 'female-tianmei',  // 🔥 读取音色
           })
         } else if (q.type === 'listening') {
           // Load narration from t_question_types for listening (question_type_id = 2)
@@ -1280,6 +1325,10 @@ export default function QuestionManagement() {
       // 🔥 如果有时长，则保存到 content_json
       if (imitationForm.duration !== undefined) {
         contentJson.duration = imitationForm.duration
+      }
+      // 🔥 保存音色
+      if (imitationForm.voice) {
+        contentJson.voice = imitationForm.voice
       }
 
       const requestData: any = {
@@ -1593,7 +1642,7 @@ export default function QuestionManagement() {
 
         toast.success('试卷创建成功')
         handleCancelAddPaper()
-        // 可以在这里刷新试卷列表
+        await loadExamPapers()
       }
     } catch (err: any) {
       toast.error(err.message || '创建失败')
@@ -1668,7 +1717,23 @@ export default function QuestionManagement() {
                 管理练习题目，支持按题型进行筛选，难度范围为 1-5 星级。
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select
+            value={selectedVoice}
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            style={{
+              padding: '0.5rem 0.75rem',
+              borderRadius: 8,
+              border: '1px solid #e5e7eb',
+              backgroundColor: '#ffffff',
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            {availableVoices.map((v) => (
+              <option key={v.code} value={v.code}>{v.name}</option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={() => handleStartAdd('imitation')}
@@ -2099,11 +2164,6 @@ export default function QuestionManagement() {
                     }}
                   />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>
-                    当前难度：{getDifficultyLabel(imitationForm.difficulty)} ({imitationForm.difficulty}星)
-                  </div>
-                </div>
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
@@ -2128,6 +2188,7 @@ export default function QuestionManagement() {
                   text: imitationForm.content,
                   index: 0,
                   actionKey: 'imitation',
+                  voice: selectedVoice,
                 })}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -3337,7 +3398,7 @@ export default function QuestionManagement() {
             </section>
           )}
 
-          {/* 试卷列表（暂时为空，可以后续添加） */}
+          {/* 试卷列表 */}
           <section
             style={{
               borderRadius: 12,
@@ -3347,9 +3408,57 @@ export default function QuestionManagement() {
             }}
           >
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>试卷列表</h3>
-            <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
-              试卷列表功能待开发
-            </div>
+            {examPapersLoading ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: '#6b7280' }}>正在加载试卷…</div>
+            ) : examPapers.length === 0 ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>
+                暂无试卷，可从上方新增一套包含四种固定题型的试卷。
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f9fafb', color: '#4b5563' }}>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>试卷名称</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>考试时长</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>总分</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>结构</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>状态</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>创建时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {examPapers.map((paper) => (
+                      <tr key={paper.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+                        <td style={{ padding: '0.8rem 0.7rem' }}>
+                          <div style={{ fontWeight: 600, color: '#111827' }}>{paper.name}</div>
+                          {paper.description && (
+                            <div style={{ color: '#6b7280', marginTop: 3 }}>{paper.description}</div>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.8rem 0.7rem' }}>{Math.round(paper.time_limit / 60)} 分钟</td>
+                        <td style={{ padding: '0.8rem 0.7rem' }}>{paper.total_score} 分</td>
+                        <td style={{ padding: '0.8rem 0.7rem', color: '#2563eb' }}>固定四类 · 各 1 题</td>
+                        <td style={{ padding: '0.8rem 0.7rem' }}>
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '0.2rem 0.55rem',
+                            borderRadius: 999,
+                            backgroundColor: paper.is_active ? '#dcfce7' : '#f3f4f6',
+                            color: paper.is_active ? '#166534' : '#6b7280',
+                          }}>
+                            {paper.is_active ? '已启用' : '已停用'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.8rem 0.7rem', color: '#6b7280' }}>
+                          {paper.created_at ? new Date(paper.created_at).toLocaleString('zh-CN') : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         </>
       ) : (
