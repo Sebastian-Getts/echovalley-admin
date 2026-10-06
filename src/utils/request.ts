@@ -1,9 +1,17 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios'
+
+export interface ApiClient {
+  get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+  post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  put<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  patch<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T>
+  delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
+}
 
 const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 // 创建 axios 实例
-const request: AxiosInstance = axios.create({
+const axiosInstance = axios.create({
   baseURL: apiBaseURL,
   timeout: 10000,
   headers: {
@@ -12,7 +20,7 @@ const request: AxiosInstance = axios.create({
 })
 
 // 请求拦截器
-request.interceptors.request.use(
+axiosInstance.interceptors.request.use(
   (config) => {
     // 可以在这里添加 token 等认证信息
     const token = localStorage.getItem('token')
@@ -27,7 +35,7 @@ request.interceptors.request.use(
 )
 
 // 响应拦截器
-request.interceptors.response.use(
+axiosInstance.interceptors.response.use(
   (response: AxiosResponse) => {
     // API 响应格式: { code, message, data }
     // 直接返回 response.data，这样调用方得到的是 { code, message, data }
@@ -93,8 +101,10 @@ request.interceptors.response.use(
   }
 )
 
-export default request
-
+// The response interceptor unwraps AxiosResponse and returns the API payload.
+// Expose that actual contract to callers instead of AxiosInstance's default
+// Promise<AxiosResponse<T>> signature.
+export default axiosInstance as unknown as ApiClient
 
 
 
