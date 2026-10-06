@@ -13,6 +13,7 @@ import {
   Legend,
 } from "recharts";
 import request from "../utils/request";
+import { useToast } from "../components/Toast";
 
 // 音频代理URL处理
 const getApiBase = () => {
@@ -30,15 +31,13 @@ const QUESTION_TYPES = [
   { value: "retelling", label: "短文复述及提问" },
 ] as const;
 
-// Mock 数据：题目列表
-const mockQuestions = [
-  { id: "q1", title: "Unit 1 - 日常对话练习", type: "imitation" },
-  { id: "q2", title: "Unit 2 - 校园生活", type: "listening" },
-  { id: "q3", title: "Unit 3 - 家庭话题", type: "answering" },
-  { id: "q4", title: "Unit 4 - 综合测试", type: "retelling" },
-  { id: "exam1", title: "期中考试 - 综合测试卷", type: "exam" },
-  { id: "exam2", title: "期末考试 - 综合测试卷", type: "exam" },
-];
+// 与后端固定题型配置保持一致，仅用于尚未评分记录的默认满分。
+const DEFAULT_MAX_SCORE_BY_TYPE: Record<string, number> = {
+  imitation: 10,
+  listening: 15,
+  answering: 20,
+  retelling: 25,
+};
 
 // 学生数据类型
 interface StudentDetail {
@@ -46,8 +45,10 @@ interface StudentDetail {
   studentId: string;
   name: string;
   class: string;
-  score: number;
-  grade: "优秀" | "及格" | "低分";
+  score: number | null;
+  maxScore?: number | null;
+  grade: "优秀" | "及格" | "低分" | "未评分";
+  status?: string;
   audioUrl: string;
   audioUrls?: string[]; // 听选信息有多个音频
   questionTitle?: string; // 题目名称
@@ -61,6 +62,7 @@ interface StudentAnswerResponse {
   question_id: number;
   student_name?: string;
   student_student_id?: string;
+  student_class?: string;
   question_title?: string;
   score?: number;
   max_score?: number;
@@ -73,7 +75,7 @@ interface StudentAnswerResponse {
 }
 
 // Mock 学生答题明细数据（根据不同的筛选条件会有不同的数据）
-const generateMockData = (
+export const generateMockData = (
   _mode: "practice" | "exam",
   _questionType: string,
   selectedQuestion: string
@@ -221,14 +223,14 @@ const generateMockData = (
   if (selectedQuestion !== "all") {
     // 根据题目类型调整分数分布
     const adjustedData = baseData.map((student, index) => {
-      let newScore = student.score;
+      let newScore = student.score ?? 0;
       // 模拟不同题目的难度差异
       if (selectedQuestion === "q1") {
-        newScore = Math.max(60, student.score - 5 + (index % 3) * 3);
+        newScore = Math.max(60, (student.score ?? 0) - 5 + (index % 3) * 3);
       } else if (selectedQuestion === "q2") {
-        newScore = Math.max(60, student.score - 3 + (index % 2) * 2);
+        newScore = Math.max(60, (student.score ?? 0) - 3 + (index % 2) * 2);
       } else if (selectedQuestion === "exam1" || selectedQuestion === "exam2") {
-        newScore = Math.max(50, student.score - 8 + (index % 4) * 2);
+        newScore = Math.max(50, (student.score ?? 0) - 8 + (index % 4) * 2);
       }
       const newGrade: "优秀" | "及格" | "低分" =
         newScore >= 90
@@ -332,7 +334,7 @@ function ExpandRow({
   slotCount: number;
 }) {
   return (
-    <td colSpan={7} style={{ padding: "0.5rem 0.8rem", backgroundColor: "#f9fafb" }}>
+    <td colSpan={8} style={{ padding: "0.5rem 0.8rem", backgroundColor: "#f9fafb" }}>
       <div
         style={{
           display: "flex",
@@ -416,6 +418,7 @@ type SortField = "score" | "name" | "studentId" | "class";
 type SortOrder = "asc" | "desc";
 
 export default function PracticeOverview() {
+  const toast = useToast();
   const [mode, setMode] = useState<"practice" | "exam">("practice");
   const [questionType, setQuestionType] = useState<string>("all");
   const [selectedQuestion, setSelectedQuestion] = useState<string>("all");
@@ -434,8 +437,13 @@ export default function PracticeOverview() {
     []
   );
   const [questions, setQuestions] = useState<Array<{id: string; title: string; type: string}>>([]);
-  const [loading, setLoading] = useState(false); // eslint-disable-line @typescript-eslint/no-unused-vars
-  const [useApiData, setUseApiData] = useState(true); // 是否使用API数据，如果API失败则回退到mock数据
+  const [, setLoading] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [gradingRecord, setGradingRecord] = useState<StudentDetail | null>(null);
+  const [gradingScore, setGradingScore] = useState("");
+  const [gradingMaxScore, setGradingMaxScore] = useState("25");
+  const [gradingFeedback, setGradingFeedback] = useState("");
+  const [savingScore, setSavingScore] = useState(false);
 
   // 听选信息展开状态
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -578,15 +586,15 @@ export default function PracticeOverview() {
       }
     } catch (error) {
       console.error("Failed to load questions:", error);
-      // 如果API失败，使用mock数据作为fallback
-      setQuestions(mockQuestions);
+      setQuestions([]);
+      setDataError("题目列表加载失败，请检查后端服务后重试。");
     }
   };
 
   // 根据筛选条件过滤题目
   const filteredQuestions = useMemo(
     () =>
-      (questions.length > 0 ? questions : mockQuestions).filter((q) => {
+      questions.filter((q) => {
         if (mode === "exam") {
           return q.type === "exam";
         } else {
@@ -601,13 +609,12 @@ export default function PracticeOverview() {
 
   // 从API加载数据
   useEffect(() => {
-    if (useApiData) {
-      loadStudentAnswers();
-    }
-  }, [mode, questionType, selectedQuestion, useApiData]);
+    loadStudentAnswers();
+  }, [mode, questionType, selectedQuestion]);
 
   const loadStudentAnswers = async () => {
     setLoading(true);
+    setDataError(null);
     try {
       const params: any = {
         skip: 0,
@@ -649,21 +656,14 @@ export default function PracticeOverview() {
       }>("/student-answers", { params });
 
       if (response.code === 200 && response.data) {
-        console.log("[API] student-answers response:", JSON.stringify(response.data, null, 2));
-        console.log("[API] items count:", response.data.items?.length);
-        if (response.data.items?.length > 0) {
-          console.log("[API] first item keys:", Object.keys(response.data.items[0]));
-          console.log("[API] first item audio_url:", response.data.items[0]?.audio_url);
-          console.log("[API] first item audio_urls:", response.data.items[0]?.audio_urls);
-        }
         setStudentAnswers(response.data.items || []);
       } else {
         throw new Error(response.message || "获取数据失败");
       }
     } catch (error) {
       console.error("Failed to load student answers:", error);
-      // API失败时回退到mock数据
-      setUseApiData(false);
+      setStudentAnswers([]);
+      setDataError("答题数据加载失败，未展示模拟数据。请检查服务连接后重试。");
     } finally {
       setLoading(false);
     }
@@ -671,7 +671,7 @@ export default function PracticeOverview() {
 
   // 将API数据转换为前端使用的格式（每条答题记录单独一行，显示题目信息）
   const baseStudentDetails = useMemo(() => {
-    if (useApiData && studentAnswers.length > 0) {
+    if (studentAnswers.length > 0) {
       // 每条答题记录作为单独一行，不再按学生分组
       return studentAnswers.map((answer) => {
         // 优先使用 audio_urls，否则用 audio_url
@@ -683,19 +683,19 @@ export default function PracticeOverview() {
           studentId: answer.student_student_id || "",
           name: answer.student_name || "",
           class: answer.student_class || "未知班级",
-          score: answer.score || 0,
-          grade: (answer.grade || "低分") as "优秀" | "及格" | "低分",
+          score: answer.score ?? null,
+          maxScore: answer.max_score ?? null,
+          grade: (answer.grade || "未评分") as StudentDetail["grade"],
+          status: answer.status,
           audioUrl: primaryAudioUrl,
           audioUrls: audioUrls,
           questionTitle: answer.question_title || "未知题目",
           questionType: answer.question_type,
         };
       });
-    } else {
-      // 使用mock数据
-      return generateMockData(mode, questionType, selectedQuestion);
     }
-  }, [useApiData, studentAnswers, mode, questionType, selectedQuestion]);
+    return [];
+  }, [studentAnswers]);
 
   // 获取所有班级（用于筛选）
   const allClasses = useMemo(() => {
@@ -736,8 +736,8 @@ export default function PracticeOverview() {
 
       switch (sortField) {
         case "score":
-          aVal = a.score;
-          bVal = b.score;
+          aVal = a.score ?? -1;
+          bVal = b.score ?? -1;
           break;
         case "name":
           aVal = a.name;
@@ -781,7 +781,8 @@ export default function PracticeOverview() {
   );
 
   // 计算统计数据（基于班级筛选后的数据）
-  const totalStudents = filteredStudentDetails.length;
+  const gradedDetails = filteredStudentDetails.filter((s) => s.score !== null);
+  const gradedCount = gradedDetails.length;
   const excellentCount = filteredStudentDetails.filter(
     (s) => s.grade === "优秀"
   ).length;
@@ -793,13 +794,13 @@ export default function PracticeOverview() {
   ).length;
 
   const excellentRate =
-    totalStudents > 0
-      ? ((excellentCount / totalStudents) * 100).toFixed(1)
+    gradedCount > 0
+      ? ((excellentCount / gradedCount) * 100).toFixed(1)
       : "0.0";
   const passRate =
-    totalStudents > 0 ? ((passCount / totalStudents) * 100).toFixed(1) : "0.0";
+    gradedCount > 0 ? ((passCount / gradedCount) * 100).toFixed(1) : "0.0";
   const lowRate =
-    totalStudents > 0 ? ((lowCount / totalStudents) * 100).toFixed(1) : "0.0";
+    gradedCount > 0 ? ((lowCount / gradedCount) * 100).toFixed(1) : "0.0";
 
   // 等级分布数据（用于饼图）
   const gradeDistribution = useMemo(
@@ -831,29 +832,29 @@ export default function PracticeOverview() {
     () => [
       {
         range: "0-60",
-        count: filteredStudentDetails.filter((s) => s.score < 60).length,
+        count: gradedDetails.filter((s) => (s.score ?? 0) < 60).length,
       },
       {
         range: "60-70",
-        count: filteredStudentDetails.filter(
-          (s) => s.score >= 60 && s.score < 70
+        count: gradedDetails.filter(
+          (s) => (s.score ?? 0) >= 60 && (s.score ?? 0) < 70
         ).length,
       },
       {
         range: "70-80",
-        count: filteredStudentDetails.filter(
-          (s) => s.score >= 70 && s.score < 80
+        count: gradedDetails.filter(
+          (s) => (s.score ?? 0) >= 70 && (s.score ?? 0) < 80
         ).length,
       },
       {
         range: "80-90",
-        count: filteredStudentDetails.filter(
-          (s) => s.score >= 80 && s.score < 90
+        count: gradedDetails.filter(
+          (s) => (s.score ?? 0) >= 80 && (s.score ?? 0) < 90
         ).length,
       },
       {
         range: "90-100",
-        count: filteredStudentDetails.filter((s) => s.score >= 90).length,
+        count: gradedDetails.filter((s) => (s.score ?? 0) >= 90).length,
       },
     ],
     [filteredStudentDetails]
@@ -868,6 +869,42 @@ export default function PracticeOverview() {
       setSortOrder("desc");
     }
     setCurrentPage(1);
+  };
+
+  const openGrading = (student: StudentDetail) => {
+    setGradingRecord(student);
+    setGradingScore(student.score === null ? "" : String(student.score));
+    setGradingMaxScore(String(
+      student.maxScore
+      ?? (student.questionType ? DEFAULT_MAX_SCORE_BY_TYPE[student.questionType] : undefined)
+      ?? 100
+    ));
+    setGradingFeedback("");
+  };
+
+  const saveManualScore = async () => {
+    if (!gradingRecord) return;
+    const score = Number(gradingScore);
+    const maxScore = Number(gradingMaxScore);
+    if (!Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0 || score < 0 || score > maxScore) {
+      toast.warning("请输入有效分数，得分需在 0 到满分之间");
+      return;
+    }
+    setSavingScore(true);
+    try {
+      await request.put(`/student-answers/${gradingRecord.id}/score`, {
+        score,
+        max_score: maxScore,
+        feedback: gradingFeedback,
+      });
+      toast.success("人工评分已保存");
+      setGradingRecord(null);
+      await loadStudentAnswers();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "评分保存失败");
+    } finally {
+      setSavingScore(false);
+    }
   };
 
   return (
@@ -1057,6 +1094,12 @@ export default function PracticeOverview() {
             </select>
           </div>
         </div>
+
+        {dataError && (
+          <div style={{ marginBottom: 16, padding: "0.75rem 1rem", borderRadius: 8, backgroundColor: "#fef2f2", color: "#991b1b", fontSize: 13 }}>
+            {dataError}
+          </div>
+        )}
       </section>
 
       {/* 统计图表 - 饼图和柱状图并排 */}
@@ -1244,6 +1287,7 @@ export default function PracticeOverview() {
             <option value="优秀">优秀</option>
             <option value="及格">及格</option>
             <option value="低分">低分</option>
+            <option value="未评分">未评分</option>
           </select>
         </div>
 
@@ -1340,6 +1384,9 @@ export default function PracticeOverview() {
                 >
                   语音
                 </th>
+                <th style={{ textAlign: "center", padding: "0.6rem 0.8rem", fontWeight: 600, width: "90px" }}>
+                  评分
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1377,7 +1424,7 @@ export default function PracticeOverview() {
                           fontWeight: 500,
                         }}
                       >
-                        {student.score} 分
+                        {student.score === null ? "—" : `${student.score} / ${student.maxScore || "—"}`}
                       </td>
                       <td
                         style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}
@@ -1389,13 +1436,17 @@ export default function PracticeOverview() {
                             borderRadius: 6,
                             fontSize: 11,
                             fontWeight: 500,
-                            backgroundColor:
+                            backgroundColor: student.grade === "未评分"
+                              ? "#f3f4f6"
+                              :
                               student.grade === "优秀"
                                 ? "#dbeafe"
                                 : student.grade === "及格"
                                 ? "#d1fae5"
                                 : "#fee2e2",
-                            color:
+                            color: student.grade === "未评分"
+                              ? "#6b7280"
+                              :
                               student.grade === "优秀"
                                 ? "#1e40af"
                                 : student.grade === "及格"
@@ -1422,6 +1473,15 @@ export default function PracticeOverview() {
                           onPlay={togglePlay}
                         />
                       </td>
+                      <td style={{ padding: "0.6rem 0.8rem", textAlign: "center" }}>
+                        <button
+                          type="button"
+                          onClick={() => openGrading(student)}
+                          style={{ border: "1px solid #bfdbfe", backgroundColor: "#eff6ff", color: "#1d4ed8", borderRadius: 6, padding: "0.3rem 0.65rem", cursor: "pointer", fontSize: 12 }}
+                        >
+                          {student.score === null ? "评分" : "修改"}
+                        </button>
+                      </td>
                     </tr>
                     {/* 听选信息/回答问题/短文复述及提问展开行 */}
                     {(student.questionType === 'listening' || student.questionType === 'answering' || student.questionType === 'retelling') && expandedRowId === student.id && (
@@ -1443,7 +1503,7 @@ export default function PracticeOverview() {
               ) : (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     style={{
                       padding: "2rem",
                       textAlign: "center",
@@ -1457,6 +1517,29 @@ export default function PracticeOverview() {
             </tbody>
           </table>
         </div>
+
+        {gradingRecord && (
+          <div style={{ marginTop: 16, padding: "1rem", border: "1px solid #bfdbfe", borderRadius: 10, backgroundColor: "#f8fbff" }}>
+            <div style={{ fontWeight: 600, marginBottom: 10 }}>
+              人工评分 · {gradingRecord.name} · {gradingRecord.questionTitle}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "end" }}>
+              <label style={{ fontSize: 12 }}>得分
+                <input type="number" min="0" value={gradingScore} onChange={(e) => setGradingScore(e.target.value)} style={{ display: "block", width: 90, marginTop: 4, padding: "0.45rem", border: "1px solid #d1d5db", borderRadius: 6 }} />
+              </label>
+              <label style={{ fontSize: 12 }}>满分
+                <input type="number" min="1" value={gradingMaxScore} onChange={(e) => setGradingMaxScore(e.target.value)} style={{ display: "block", width: 90, marginTop: 4, padding: "0.45rem", border: "1px solid #d1d5db", borderRadius: 6 }} />
+              </label>
+              <label style={{ fontSize: 12, flex: "1 1 240px" }}>评语（可选）
+                <input value={gradingFeedback} onChange={(e) => setGradingFeedback(e.target.value)} placeholder="例如：发音清楚，注意语调" style={{ display: "block", width: "100%", marginTop: 4, padding: "0.45rem", border: "1px solid #d1d5db", borderRadius: 6, boxSizing: "border-box" }} />
+              </label>
+              <button type="button" onClick={saveManualScore} disabled={savingScore} style={{ padding: "0.5rem 0.9rem", border: 0, borderRadius: 6, backgroundColor: "#2563eb", color: "white", cursor: savingScore ? "wait" : "pointer" }}>
+                {savingScore ? "保存中…" : "保存评分"}
+              </button>
+              <button type="button" onClick={() => setGradingRecord(null)} style={{ padding: "0.5rem 0.9rem", border: "1px solid #d1d5db", borderRadius: 6, backgroundColor: "white", cursor: "pointer" }}>取消</button>
+            </div>
+          </div>
+        )}
 
         {/* 分页 */}
         {totalDetailPages > 1 && (
