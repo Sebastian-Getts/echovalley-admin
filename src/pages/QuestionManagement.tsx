@@ -98,16 +98,17 @@ interface RetellingFormData {
 }
 
 // 试卷表单数据
+// Per-type 满分由后端常量决定（10/15/20/25），不再由教师输入；
+// 试卷总分固定为 70。后端会忽略 total_score / per-section score 字段。
 interface ExamPaperFormData {
   name: string
   description: string
   time_limit: number // 时间限制（秒）
-  total_score: number // 试卷总分
   questions: {
-    imitation: { questionId: number | null; score: number } // 模仿朗读题目ID和分值
-    listening: { questionId: number | null; score: number } // 听选信息题目ID和分值
-    answering: { questionId: number | null; score: number } // 回答问题题目ID和分值
-    retelling: { questionId: number | null; score: number } // 短文复述及提问题目ID和分值
+    imitation: { questionId: number | null } // 模仿朗读题目ID
+    listening: { questionId: number | null } // 听选信息题目ID
+    answering: { questionId: number | null } // 回答问题题目ID
+    retelling: { questionId: number | null } // 短文复述及提问题目ID
   }
 }
 
@@ -226,12 +227,11 @@ export default function QuestionManagement() {
     name: '',
     description: '',
     time_limit: 1200, // 默认20分钟
-    total_score: 100,
     questions: {
-      imitation: { questionId: null, score: 25 },
-      listening: { questionId: null, score: 25 },
-      answering: { questionId: null, score: 25 },
-      retelling: { questionId: null, score: 25 },
+      imitation: { questionId: null },
+      listening: { questionId: null },
+      answering: { questionId: null },
+      retelling: { questionId: null },
     },
   })
   const [availableQuestions, setAvailableQuestions] = useState<{
@@ -1542,12 +1542,11 @@ export default function QuestionManagement() {
       name: '',
       description: '',
       time_limit: 1200,
-      total_score: 100,
       questions: {
-        imitation: { questionId: null, score: 25 },
-        listening: { questionId: null, score: 25 },
-        answering: { questionId: null, score: 25 },
-        retelling: { questionId: null, score: 25 },
+        imitation: { questionId: null },
+        listening: { questionId: null },
+        answering: { questionId: null },
+        retelling: { questionId: null },
       },
     })
     loadAvailableQuestions()
@@ -1573,26 +1572,18 @@ export default function QuestionManagement() {
       return
     }
 
-    // 验证总分是否等于各题分值之和
-    const totalScore = questions.imitation.score + questions.listening.score +
-                      questions.answering.score + questions.retelling.score
-    if (Math.abs(totalScore - examPaperForm.total_score) > 0.01) {
-      toast.warning(`各题分值之和（${totalScore}）与试卷总分（${examPaperForm.total_score}）不一致`)
-      return
-    }
-
     try {
       // 创建试卷
+      // 题型满分由后端常量决定（10/15/20/25），section_config 仅保留 count。
       const paperResponse = (await request.post('/exam-papers', {
         name: examPaperForm.name,
         description: examPaperForm.description || '',
         time_limit: examPaperForm.time_limit,
-        total_score: examPaperForm.total_score,
         section_config: {
-          section1: { count: 1, score: questions.imitation.score },
-          section2: { count: 1, score: questions.listening.score },
-          section3: { count: 1, score: questions.answering.score },
-          section4: { count: 1, score: questions.retelling.score },
+          section1: { count: 1 },
+          section2: { count: 1 },
+          section3: { count: 1 },
+          section4: { count: 1 },
         },
       })) as { code: number; message: string; data: { id: number } }
 
@@ -1600,6 +1591,7 @@ export default function QuestionManagement() {
         const paperId = paperResponse.data.id
 
         // 创建试卷题目关联关系
+        // 每条 paper_question 的 max_score 由后端按题型常量写入；前端仍传入值作 fallback。
         const paperQuestions = [
           {
             paper_id: paperId,
@@ -1607,7 +1599,7 @@ export default function QuestionManagement() {
             question_type: 1, // 模仿朗读
             section: 1,
             order_num: 1,
-            max_score: questions.imitation.score,
+            max_score: 10,
           },
           {
             paper_id: paperId,
@@ -1615,7 +1607,7 @@ export default function QuestionManagement() {
             question_type: 2, // 听选信息
             section: 2,
             order_num: 1,
-            max_score: questions.listening.score,
+            max_score: 15,
           },
           {
             paper_id: paperId,
@@ -1623,7 +1615,7 @@ export default function QuestionManagement() {
             question_type: 3, // 回答问题
             section: 3,
             order_num: 1,
-            max_score: questions.answering.score,
+            max_score: 20,
           },
           {
             paper_id: paperId,
@@ -1631,7 +1623,7 @@ export default function QuestionManagement() {
             question_type: 4, // 短文复述及提问
             section: 4,
             order_num: 1,
-            max_score: questions.retelling.score,
+            max_score: 25,
           },
         ]
 
@@ -3231,33 +3223,9 @@ export default function QuestionManagement() {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
-                      试卷总分 *
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={examPaperForm.total_score}
-                      onChange={(e) =>
-                        setExamPaperForm({ ...examPaperForm, total_score: parseInt(e.target.value) || 100 })
-                      }
-                      style={{
-                        width: '100%',
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: 8,
-                        border: '1px solid #e5e7eb',
-                        fontSize: 13,
-                      }}
-                    />
-                  </div>
                   <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                     <div style={{ fontSize: 12, color: '#6b7280' }}>
-                      当前各题分值之和：{' '}
-                      {examPaperForm.questions.imitation.score +
-                        examPaperForm.questions.listening.score +
-                        examPaperForm.questions.answering.score +
-                        examPaperForm.questions.retelling.score}
+                      试卷总分由四种题型分值之和固定为 70 分（模仿朗读 10 + 听选信息 15 + 回答问题 20 + 短文复述及提问 25），不可在创建时修改。
                     </div>
                   </div>
                 </div>
