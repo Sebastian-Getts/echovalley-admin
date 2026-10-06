@@ -256,7 +256,7 @@ export default function StudentAccounts() {
       if (filterClass !== 'all') params.class = filterClass
       if (searchKeyword) params.search = searchKeyword
 
-      const response = await request.get('/students/export', {
+      const response = await request.get<Blob>('/students/export', {
         params,
         responseType: 'blob',
       })
