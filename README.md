@@ -76,7 +76,7 @@ npm run type-check
 创建 `.env` 文件（参考 `.env.example`）：
 
 ```
-VITE_API_BASE_URL=http://localhost:8080
+VITE_API_BASE_URL=http://localhost:8001/api/v1
 VITE_APP_TITLE=EchoValley Admin
 ```
 
