@@ -73,12 +73,14 @@ npm run type-check
 
 ## 环境变量
 
-创建 `.env` 文件（参考 `.env.example`）：
+环境配置：
 
-```
-VITE_API_BASE_URL=http://localhost:8001/api/v1
-VITE_APP_TITLE=EchoValley Admin
-```
+- `npm run dev` / `vite` 默认 development 模式，读 `.env.development`。
+- `npm run build` 默认 production 模式，读 `.env.production`。
+
+`.env.development` 与 `.env.production` 已提交（占位域名 `example.com`），部署前请替换为实际 HTTPS 域名。
+
+`.env.example` 仅作字段说明，留作模板。
 
 ## License
 
