@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   BarChart,
   Bar,
@@ -419,6 +420,7 @@ type SortOrder = "asc" | "desc";
 
 export default function PracticeOverview() {
   const toast = useToast();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<"practice" | "exam">("practice");
   const [questionType, setQuestionType] = useState<string>("all");
   const [selectedQuestion, setSelectedQuestion] = useState<string>("all");
@@ -909,10 +911,54 @@ export default function PracticeOverview() {
 
   return (
     <div>
-      <h2 style={{ fontSize: 20, marginBottom: 12 }}>学习情况</h2>
-      <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 20 }}>
-        查看学生的练习和考试情况，支持按模式、题型、题目进行筛选分析。
-      </p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: 20, marginBottom: 4 }}>学习情况</h2>
+          <p style={{ color: "#6b7280", fontSize: 13 }}>
+            查看学生的练习和考试情况，支持按模式、题型、题目进行筛选分析。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate("/exam-grading")}
+          style={{
+            padding: "0.5rem 1rem",
+            borderRadius: 8,
+            border: "1px solid #2563eb",
+            backgroundColor: "#2563eb",
+            color: "#ffffff",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          整卷评分 →
+        </button>
+      </div>
+
+      <div
+        style={{
+          padding: "0.65rem 0.9rem",
+          borderRadius: 8,
+          backgroundColor: "#eef2ff",
+          color: "#3730a3",
+          fontSize: 12,
+          marginBottom: 16,
+          border: "1px solid #c7d2fe",
+        }}
+      >
+        本页是<strong>逐条答卷</strong>视图：对每条录音单独打分。
+        需要<strong>按学生 × 试卷</strong>聚合后批量评分、评分完成、发布成绩时，请进入「整卷评分」页面。
+      </div>
 
       {/* 筛选条件 */}
       <section
