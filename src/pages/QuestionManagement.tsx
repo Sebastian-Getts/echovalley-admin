@@ -18,6 +18,13 @@ const QUESTION_TYPES = [
   { value: 'retelling', label: '短文复述及提问' },
 ] as const
 
+// 试卷分类（与后端 app/core/constants.py PAPER_CATEGORIES 保持一致）
+const PAPER_CATEGORIES = [
+  { value: 'unit_test', label: '单元测试', icon: '📚' },
+  { value: 'stage_test', label: '阶段测试', icon: '📊' },
+  { value: 'mock_exam', label: '综合模拟', icon: '🎯' },
+] as const
+
 // 题目类型
 interface Question {
   id: string
@@ -103,6 +110,7 @@ interface RetellingFormData {
 interface ExamPaperFormData {
   name: string
   description: string
+  category: string // 分类：unit_test / stage_test / mock_exam
   time_limit: number // 时间限制（秒）
   questions: {
     imitation: { questionId: number | null } // 模仿朗读题目ID
@@ -116,6 +124,7 @@ interface ExamPaperListItem {
   id: number
   name: string
   description?: string
+  category?: string | null
   time_limit: number
   total_score: number
   is_active: boolean
@@ -226,6 +235,7 @@ export default function QuestionManagement() {
   const [examPaperForm, setExamPaperForm] = useState<ExamPaperFormData>({
     name: '',
     description: '',
+    category: PAPER_CATEGORIES[0].value,
     time_limit: 1200, // 默认20分钟
     questions: {
       imitation: { questionId: null },
@@ -1541,6 +1551,7 @@ export default function QuestionManagement() {
     setExamPaperForm({
       name: '',
       description: '',
+      category: PAPER_CATEGORIES[0].value,
       time_limit: 1200,
       questions: {
         imitation: { questionId: null },
@@ -1578,6 +1589,7 @@ export default function QuestionManagement() {
       const paperResponse = (await request.post('/exam-papers', {
         name: examPaperForm.name,
         description: examPaperForm.description || '',
+        category: examPaperForm.category,
         time_limit: examPaperForm.time_limit,
         section_config: {
           section1: { count: 1 },
@@ -3223,6 +3235,34 @@ export default function QuestionManagement() {
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                      试卷分类 *
+                    </label>
+                    <select
+                      value={examPaperForm.category}
+                      onChange={(e) =>
+                        setExamPaperForm({ ...examPaperForm, category: e.target.value })
+                      }
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem 0.75rem',
+                        borderRadius: 8,
+                        border: '1px solid #e5e7eb',
+                        fontSize: 13,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {PAPER_CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>
+                          {category.icon} {category.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                      小程序考试列表按此分类归档
+                    </div>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                     <div style={{ fontSize: 12, color: '#6b7280' }}>
                       试卷总分由四种题型分值之和固定为 70 分（模仿朗读 10 + 听选信息 15 + 回答问题 20 + 短文复述及提问 25），不可在创建时修改。
@@ -3368,6 +3408,7 @@ export default function QuestionManagement() {
                   <thead>
                     <tr style={{ backgroundColor: '#f9fafb', color: '#4b5563' }}>
                       <th style={{ textAlign: 'left', padding: '0.7rem' }}>试卷名称</th>
+                      <th style={{ textAlign: 'left', padding: '0.7rem' }}>分类</th>
                       <th style={{ textAlign: 'left', padding: '0.7rem' }}>考试时长</th>
                       <th style={{ textAlign: 'left', padding: '0.7rem' }}>总分</th>
                       <th style={{ textAlign: 'left', padding: '0.7rem' }}>结构</th>
@@ -3383,6 +3424,28 @@ export default function QuestionManagement() {
                           {paper.description && (
                             <div style={{ color: '#6b7280', marginTop: 3 }}>{paper.description}</div>
                           )}
+                        </td>
+                        <td style={{ padding: '0.8rem 0.7rem' }}>
+                          {(() => {
+                            const meta = PAPER_CATEGORIES.find(
+                              (c) => c.value === paper.category,
+                            )
+                            if (!meta) {
+                              return <span style={{ color: '#9ca3af' }}>未分类</span>
+                            }
+                            return (
+                              <span style={{
+                                display: 'inline-block',
+                                padding: '0.2rem 0.55rem',
+                                borderRadius: 999,
+                                backgroundColor: '#eef2ff',
+                                color: '#3730a3',
+                                fontSize: 12,
+                              }}>
+                                {meta.icon} {meta.label}
+                              </span>
+                            )
+                          })()}
                         </td>
                         <td style={{ padding: '0.8rem 0.7rem' }}>{Math.round(paper.time_limit / 60)} 分钟</td>
                         <td style={{ padding: '0.8rem 0.7rem' }}>{paper.total_score} 分</td>
