@@ -158,6 +158,7 @@ export default function ExamGrading() {
   const [sessionDetailLoading, setSessionDetailLoading] = useState(false)
   const [overallFeedback, setOverallFeedback] = useState('')
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
     void loadPapers()
@@ -317,6 +318,28 @@ export default function ExamGrading() {
     }
   }
 
+  async function handleExportScores() {
+    if (selectedPaperId === null) return
+    setExporting(true)
+    try {
+      const blob = await request.get<Blob>(
+        `/exam-grading/papers/${selectedPaperId}/export`,
+        { responseType: 'blob' },
+      )
+      const url = window.URL.createObjectURL(new Blob([blob]))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${selectedPaper?.name || 'paper'}-成绩.csv`
+      link.click()
+      window.URL.revokeObjectURL(url)
+      toast.success('成绩表已导出')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const totalsByPaperId = useMemo(() => {
     // Aggregated counts per paper, derived from the loaded sessionList.
     if (!sessionList) return null
@@ -430,6 +453,14 @@ export default function ExamGrading() {
                 </div>
               )}
             </div>
+            <button
+              type="button"
+              onClick={() => void handleExportScores()}
+              disabled={exporting}
+              style={secondaryBtnStyle}
+            >
+              {exporting ? '导出中...' : '导出成绩 CSV'}
+            </button>
           </div>
 
           {sessionListLoading && <div style={{ padding: 16, color: '#6b7280' }}>加载中...</div>}
