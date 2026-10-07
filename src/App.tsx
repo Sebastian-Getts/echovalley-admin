@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import StudentAccounts from './pages/StudentAccounts'
 import QuestionManagement from './pages/QuestionManagement'
 import PracticeOverview from './pages/PracticeOverview'
+import ExamGrading from './pages/ExamGrading'
 import Settings from './pages/Settings'
 import { ROUTES, STORAGE_KEYS } from './constants'
 import { ToastProvider } from './components/Toast'
@@ -34,6 +35,7 @@ function App() {
             <Route path="students" element={<StudentAccounts />} />
             <Route path="questions" element={<QuestionManagement />} />
             <Route path="practice" element={<PracticeOverview />} />
+            <Route path="exam-grading" element={<ExamGrading />} />
             <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>

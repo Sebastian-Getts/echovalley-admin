@@ -3273,28 +3273,8 @@ export default function QuestionManagement() {
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                           <label style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
-                            {type.label} *
+                            {type.label} * <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>题型满分由后端常量决定</span>
                           </label>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <label style={{ fontSize: 12, color: '#6b7280' }}>分值：</label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={selectedQuestion.score}
-                              onChange={(e) => {
-                                const newQuestions = { ...examPaperForm.questions }
-                                newQuestions[typeKey].score = parseInt(e.target.value) || 25
-                                setExamPaperForm({ ...examPaperForm, questions: newQuestions })
-                              }}
-                              style={{
-                                width: 80,
-                                padding: '0.25rem 0.5rem',
-                                borderRadius: 6,
-                                border: '1px solid #e5e7eb',
-                                fontSize: 12,
-                              }}
-                            />
-                          </div>
                         </div>
                         <select
                           value={selectedQuestion.questionId || ''}

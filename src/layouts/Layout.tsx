@@ -133,6 +133,17 @@ export default function Layout() {
             >
               题目管理
             </NavLink>
+            <NavLink
+              to="exam-grading"
+              style={({ isActive }) => ({
+                ...linkBaseStyle,
+                backgroundColor: isActive ? '#eff6ff' : 'transparent',
+                color: isActive ? '#1d4ed8' : linkBaseStyle.color,
+                fontWeight: isActive ? 600 : 500,
+              })}
+            >
+              整卷评分
+            </NavLink>
             <div
               style={{
                 fontSize: 11,

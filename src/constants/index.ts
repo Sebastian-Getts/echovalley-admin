@@ -15,6 +15,7 @@ export const ROUTES = {
   STUDENTS: '/students',
   QUESTIONS: '/questions',
   PRACTICE: '/practice',
+  EXAM_GRADING: '/exam-grading',
   SETTINGS: '/settings',
 } as const
 
