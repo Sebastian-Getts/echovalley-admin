@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import request from '../utils/request'
 import { useToast } from '../components/Toast'
+import QuestionPicker from '../components/QuestionPicker'
 
 // API 基础路径（用于音频代理，解决 MinIO 跨域无法播放）
 const getApiBase = () => {
@@ -230,6 +231,9 @@ export default function QuestionManagement() {
 
   // 试卷管理相关状态
   const [isAddingPaper, setIsAddingPaper] = useState(false)
+  const [pickerTypeKey, setPickerTypeKey] = useState<
+    'imitation' | 'listening' | 'answering' | 'retelling' | null
+  >(null)
   const [examPapers, setExamPapers] = useState<ExamPaperListItem[]>([])
   const [examPapersLoading, setExamPapersLoading] = useState(false)
   const [examPaperForm, setExamPaperForm] = useState<ExamPaperFormData>({
@@ -3316,29 +3320,68 @@ export default function QuestionManagement() {
                             {type.label} * <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400 }}>题型满分由后端常量决定</span>
                           </label>
                         </div>
-                        <select
-                          value={selectedQuestion.questionId || ''}
-                          onChange={(e) => {
-                            const newQuestions = { ...examPaperForm.questions }
-                            newQuestions[typeKey].questionId = e.target.value ? parseInt(e.target.value) : null
-                            setExamPaperForm({ ...examPaperForm, questions: newQuestions })
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '0.5rem 0.75rem',
-                            borderRadius: 8,
-                            border: '1px solid #e5e7eb',
-                            fontSize: 13,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <option value="">请选择题目</option>
-                          {questions.map((q) => (
-                            <option key={q.id} value={q.id}>
-                              {q.title} (难度: {q.difficulty.toFixed(2)})
-                            </option>
-                          ))}
-                        </select>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            onClick={() => setPickerTypeKey(typeKey)}
+                            disabled={questions.length === 0}
+                            style={{
+                              padding: '0.5rem 0.9rem',
+                              borderRadius: 8,
+                              border: '1px solid #2563eb',
+                              backgroundColor: questions.length === 0 ? '#f3f4f6' : '#2563eb',
+                              color: questions.length === 0 ? '#9ca3af' : '#ffffff',
+                              fontSize: 13,
+                              cursor: questions.length === 0 ? 'not-allowed' : 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            从题库选择（{questions.length}）
+                          </button>
+                          <div style={{ flex: 1, fontSize: 13, color: '#374151', minWidth: 0 }}>
+                            {selectedQuestion.questionId ? (
+                              (() => {
+                                const picked = questions.find(
+                                  (q) => parseInt(q.id, 10) === selectedQuestion.questionId,
+                                )
+                                return picked ? (
+                                  <span>
+                                    <span style={{ color: '#16a34a' }}>✓ </span>
+                                    {picked.title}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: '#6b7280' }}>
+                                    已选题目 #{selectedQuestion.questionId}
+                                  </span>
+                                )
+                              })()
+                            ) : (
+                              <span style={{ color: '#9ca3af' }}>尚未选择题目</span>
+                            )}
+                          </div>
+                          {selectedQuestion.questionId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newQuestions = { ...examPaperForm.questions }
+                                newQuestions[typeKey].questionId = null
+                                setExamPaperForm({ ...examPaperForm, questions: newQuestions })
+                              }}
+                              style={{
+                                padding: '0.3rem 0.6rem',
+                                borderRadius: 6,
+                                border: '1px solid #e5e7eb',
+                                backgroundColor: '#ffffff',
+                                color: '#6b7280',
+                                fontSize: 12,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              清除
+                            </button>
+                          )}
+                        </div>
                         {questions.length === 0 && (
                           <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
                             暂无可用题目，请先在专项练习中创建{type.label}题目（类别需为"未指定"）
@@ -3677,6 +3720,27 @@ export default function QuestionManagement() {
             </div>
           )}
         </>
+      )}
+
+      {pickerTypeKey && (
+        <QuestionPicker
+          open={true}
+          typeLabel={
+            QUESTION_TYPES.find((t) => t.value === pickerTypeKey)?.label || ''
+          }
+          questions={availableQuestions[pickerTypeKey]}
+          selectedId={
+            examPaperForm.questions[pickerTypeKey].questionId
+              ? String(examPaperForm.questions[pickerTypeKey].questionId)
+              : null
+          }
+          onSelect={(id) => {
+            const newQuestions = { ...examPaperForm.questions }
+            newQuestions[pickerTypeKey].questionId = parseInt(id, 10)
+            setExamPaperForm({ ...examPaperForm, questions: newQuestions })
+          }}
+          onClose={() => setPickerTypeKey(null)}
+        />
       )}
     </div>
   )
