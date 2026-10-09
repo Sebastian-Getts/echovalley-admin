@@ -1,15 +1,15 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { APP_TITLE, ROUTES, STORAGE_KEYS } from '../constants'
-import { getAdminEnvironment } from '../utils/environment'
+import { getAdminEnvironment, setAdminEnvironment } from '../utils/environment'
 
 export default function Layout() {
-  const navigate = useNavigate()
   const isDevelopment = getAdminEnvironment() === 'development'
 
   const handleLogout = () => {
     localStorage.removeItem(STORAGE_KEYS.TOKEN)
     localStorage.removeItem(STORAGE_KEYS.USER_INFO)
-    navigate(ROUTES.LOGIN, { replace: true })
+    setAdminEnvironment('production')
+    window.location.replace(`${import.meta.env.BASE_URL}${ROUTES.LOGIN.replace(/^\//, '')}`)
   }
 
   const linkBaseStyle: React.CSSProperties = {

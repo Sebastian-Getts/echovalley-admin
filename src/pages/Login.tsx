@@ -1,24 +1,13 @@
 import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { APP_TITLE, ROUTES, STORAGE_KEYS } from "../constants";
+import { APP_TITLE } from "../constants";
 import request from "../utils/request";
-import { AdminEnvironment, getAdminEnvironment, setAdminEnvironment } from "../utils/environment";
+import { setAdminEnvironment, storageKey } from "../utils/environment";
 
 export default function Login() {
-  const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [environment, setEnvironment] = useState<AdminEnvironment>(getAdminEnvironment());
-
-  const handleEnvironmentChange = (next: AdminEnvironment) => {
-    setAdminEnvironment(next);
-    setEnvironment(next);
-    setError(null);
-    window.location.reload();
-  };
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -28,6 +17,10 @@ export default function Login() {
       return;
     }
 
+    // Erin is the reserved development administrator. All other accounts use
+    // production, so the public login page never exposes an environment switch.
+    const environment = username.trim().toLowerCase() === "erin" ? "development" : "production";
+    setAdminEnvironment(environment);
     setSubmitting(true);
     try {
       const response = await request.post<{
@@ -48,12 +41,14 @@ export default function Login() {
       });
 
       if (response.code === 200 && response.data) {
-        localStorage.setItem(STORAGE_KEYS.TOKEN, response.data.token);
+        localStorage.setItem(storageKey("token"), response.data.token);
         localStorage.setItem(
-          STORAGE_KEYS.USER_INFO,
+          storageKey("userInfo"),
           JSON.stringify(response.data.user)
         );
-        navigate(ROUTES.HOME, { replace: true });
+        // Reload so all environment-scoped constants and API clients are
+        // initialized from the environment selected by the account.
+        window.location.replace(import.meta.env.BASE_URL);
       } else {
         setError(response.message || "登录失败");
       }
@@ -121,34 +116,6 @@ export default function Login() {
         </header>
 
         <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: "1rem" }}>
-            <div style={{ marginBottom: 8, fontSize: 13, color: "#374151" }}>运行环境</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {(["development", "production"] as AdminEnvironment[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => handleEnvironmentChange(item)}
-                  style={{
-                    padding: "0.55rem",
-                    borderRadius: 10,
-                    border: environment === item ? "2px solid #2563eb" : "1px solid #d1d5db",
-                    background: environment === item ? "#eff6ff" : "#fff",
-                    color: item === "development" ? "#b45309" : "#1f2937",
-                    cursor: "pointer",
-                    fontWeight: environment === item ? 700 : 500,
-                  }}
-                >
-                  {item === "development" ? "开发环境" : "正式环境"}
-                </button>
-              ))}
-            </div>
-            {environment === "development" && (
-              <div style={{ marginTop: 8, color: "#b45309", fontSize: 12 }}>
-                当前操作测试数据，不影响正式环境。
-              </div>
-            )}
-          </div>
           <div style={{ marginBottom: "1rem" }}>
             <label
               htmlFor="username"
