@@ -1,4 +1,6 @@
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios'
+import { getApiBaseURL } from './environment'
+import { STORAGE_KEYS } from '../constants'
 
 export interface ApiClient {
   get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
@@ -8,11 +10,11 @@ export interface ApiClient {
   delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T>
 }
 
-const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const loginPath = `${import.meta.env.BASE_URL}login`
 
 // 创建 axios 实例
 const axiosInstance = axios.create({
-  baseURL: apiBaseURL,
+  baseURL: getApiBaseURL(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -22,8 +24,9 @@ const axiosInstance = axios.create({
 // 请求拦截器
 axiosInstance.interceptors.request.use(
   (config) => {
+    config.baseURL = getApiBaseURL()
     // 可以在这里添加 token 等认证信息
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -60,8 +63,8 @@ axiosInstance.interceptors.response.use(
       switch (error.response.status) {
         case 401:
           // 未授权，清除 token 并跳转到登录页
-            localStorage.removeItem('token')
-            window.location.href = '/login'
+            localStorage.removeItem(STORAGE_KEYS.TOKEN)
+            window.location.href = loginPath
             return Promise.reject(new Error(data.message || '未授权'))
           case 403:
             console.error('没有权限访问')
@@ -80,8 +83,8 @@ axiosInstance.interceptors.response.use(
         // 处理 HTTP 错误
         switch (error.response.status) {
           case 401:
-          localStorage.removeItem('token')
-          window.location.href = '/login'
+          localStorage.removeItem(STORAGE_KEYS.TOKEN)
+          window.location.href = loginPath
           break
         case 403:
           console.error('没有权限访问')
@@ -105,7 +108,5 @@ axiosInstance.interceptors.response.use(
 // Expose that actual contract to callers instead of AxiosInstance's default
 // Promise<AxiosResponse<T>> signature.
 export default axiosInstance as unknown as ApiClient
-
-
 
 

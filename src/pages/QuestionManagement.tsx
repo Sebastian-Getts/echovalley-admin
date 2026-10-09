@@ -2,10 +2,12 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import request from '../utils/request'
 import { useToast } from '../components/Toast'
 import QuestionPicker from '../components/QuestionPicker'
+import { STORAGE_KEYS } from '../constants'
+import { getApiBaseURL } from '../utils/environment'
 
 // API 基础路径（用于音频代理，解决 MinIO 跨域无法播放）
 const getApiBase = () => {
-  const base = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+  const base = getApiBaseURL()
   return base.startsWith('http') ? base.replace(/\/$/, '') : `${window.location.origin}${base.startsWith('/') ? base : '/' + base}`
 }
 const getAudioProxyUrl = (minioUrl: string) =>
@@ -468,7 +470,7 @@ export default function QuestionManagement() {
     setPlayingAudioUrl(playingKey)
     setAudioError(null)
 
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
 
     try {
       // 依次播放每个音频
@@ -852,7 +854,7 @@ export default function QuestionManagement() {
       })
     }
     if (isCrossOrigin()) {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem(STORAGE_KEYS.TOKEN)
       const proxyUrl = getAudioProxyUrl(url)
       fetch(proxyUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
         .then((res) => {

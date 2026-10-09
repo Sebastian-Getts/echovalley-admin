@@ -15,10 +15,12 @@ import {
 } from "recharts";
 import request from "../utils/request";
 import { useToast } from "../components/Toast";
+import { STORAGE_KEYS } from "../constants";
+import { getApiBaseURL } from "../utils/environment";
 
 // 音频代理URL处理
 const getApiBase = () => {
-  const base = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+  const base = getApiBaseURL()
   return base.startsWith('http') ? base.replace(/\/$/, '') : `${window.location.origin}${base.startsWith('/') ? base : '/' + base}`
 }
 const getAudioProxyUrl = (minioUrl: string) =>
@@ -484,7 +486,7 @@ export default function PracticeOverview() {
     };
 
     if (isCrossOrigin()) {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
       const proxyUrl = getAudioProxyUrl(url);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);

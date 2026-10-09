@@ -1,8 +1,10 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { APP_TITLE, ROUTES, STORAGE_KEYS } from '../constants'
+import { getAdminEnvironment } from '../utils/environment'
 
 export default function Layout() {
   const navigate = useNavigate()
+  const isDevelopment = getAdminEnvironment() === 'development'
 
   const handleLogout = () => {
     localStorage.removeItem(STORAGE_KEYS.TOKEN)
@@ -63,6 +65,17 @@ export default function Layout() {
             <div style={{ fontSize: 15, fontWeight: 600 }}>桂园听说 · 教师管理后台</div>
             <div style={{ fontSize: 11, color: '#9ca3af' }}>{APP_TITLE}</div>
           </div>
+          <span style={{
+            marginLeft: 8,
+            padding: '4px 9px',
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+            color: isDevelopment ? '#92400e' : '#166534',
+            backgroundColor: isDevelopment ? '#fef3c7' : '#dcfce7',
+          }}>
+            {isDevelopment ? '开发环境' : '正式环境'}
+          </span>
         </div>
         <button
           type="button"
@@ -194,4 +207,3 @@ export default function Layout() {
     </div>
   )
 }
-

@@ -4,6 +4,9 @@ import path from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // Production and development builds can be served side by side:
+  // /admin/ -> prod API, /admin-dev/ -> dev API.
+  base: process.env.VITE_BASE_PATH || (process.env.NODE_ENV === 'production' ? '/admin/' : '/'),
   plugins: [react()],
   resolve: {
     alias: {
@@ -22,8 +25,6 @@ export default defineConfig({
     },
   },
 })
-
-
 
 
 

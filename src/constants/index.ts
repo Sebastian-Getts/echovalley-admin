@@ -4,8 +4,8 @@ export const APP_TITLE = import.meta.env.VITE_APP_TITLE || 'EchoValley Admin'
 
 // 存储键名
 export const STORAGE_KEYS = {
-  TOKEN: 'token',
-  USER_INFO: 'userInfo',
+  TOKEN: storageKey('token'),
+  USER_INFO: storageKey('userInfo'),
 } as const
 
 // 路由路径
@@ -18,4 +18,5 @@ export const ROUTES = {
   EXAM_GRADING: '/exam-grading',
   SETTINGS: '/settings',
 } as const
+import { storageKey } from '../utils/environment'
 

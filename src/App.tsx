@@ -20,7 +20,7 @@ function RequireAuth({ children }: { children: React.ReactElement }) {
 function App() {
   return (
     <ToastProvider>
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <Routes>
           <Route path={ROUTES.LOGIN} element={<Login />} />
           <Route
@@ -45,4 +45,3 @@ function App() {
 }
 
 export default App
-
